@@ -315,6 +315,10 @@ namespace Lumix
 				++parameter_count;
 			}
 
+			void add(EntityPtr parameter) override {
+				lua_pushinteger(state, parameter.index);
+				++parameter_count;
+			}
 
 			void add(bool parameter) override
 			{
@@ -417,7 +421,7 @@ namespace Lumix
 
 			if (lua_pcall(script.m_state, m_function_call.parameter_count, 0, 0) != 0)
 			{
-				logWarning("Lua Script") << lua_tostring(script.m_state, -1);
+				logError("Lua Script") << lua_tostring(script.m_state, -1);
 				lua_pop(script.m_state, 1);
 			}
 			lua_pop(script.m_state, 1);
@@ -902,8 +906,11 @@ namespace Lumix
 		void applyProperty(ScriptInstance& script, Property& prop, const char* value)
 		{
 			if (!value) return;
+			if (!value[0]) return;
+
 			lua_State* state = script.m_state;
 			if (!state) return;
+
 			const char* name = getPropertyName(prop.name_hash);
 			if (!name) return;
 
