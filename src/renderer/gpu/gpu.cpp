@@ -784,8 +784,8 @@ void VertexDecl::addAttribute(u8 idx, u8 byte_offset, u8 components_num, Attribu
 	attr.flags = flags;
 	attr.type = type;
 	attr.byte_offset = byte_offset;
-	hash = crc32(attributes, sizeof(Attribute) * attributes_count);
 	++attributes_count;
+	hash = crc32(attributes, sizeof(Attribute) * attributes_count);
 }
 
 
@@ -1503,7 +1503,8 @@ bool loadTexture(TextureHandle handle, const void* input, int input_size, u32 fl
 
 			if (li->compressed) {
 				u32 size = DDS::sizeDXTC(width, height, internal_format);
-				if (!is_dds10 && (size != hdr.dwPitchOrLinearSize || (hdr.dwFlags & DDS::DDSD_LINEARSIZE) == 0)) {
+				if (!is_dds10 && !is_cubemap && (size != hdr.dwPitchOrLinearSize || (hdr.dwFlags & DDS::DDSD_LINEARSIZE) == 0)) {
+					logError("Renderer") << "Unsupported format " << debug_name;
 					CHECK_GL(glDeleteTextures(1, &texture));
 					return false;
 				}

@@ -125,7 +125,7 @@ struct SpritePlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		ImDrawList* draw = ImGui::GetWindowDrawList();
 		ImVec2 a = ImGui::GetItemRectMin();
 		ImVec2 b = ImGui::GetItemRectMax();
-		draw->AddImage(&texture->handle, a, b);
+		draw->AddImage((ImTextureID)(intptr_t)texture->handle.value, a, b);
 
 		auto drawHandle = [&](const char* id, const ImVec2& a, const ImVec2& b, int* value, bool vertical) {
 			const float SIZE = 5;
@@ -822,6 +822,7 @@ struct StudioAppPlugin : StudioApp::IPlugin
 	void init() override
 	{
 		m_app.registerComponent("gui_button", "GUI / Button");
+		m_app.registerComponent("gui_canvas", "GUI / Canvas");
 		m_app.registerComponent("gui_image", "GUI / Image", Sprite::TYPE, "Sprite");
 		m_app.registerComponent("gui_input_field", "GUI / Input field");
 		m_app.registerComponent("gui_rect", "GUI / Rect");

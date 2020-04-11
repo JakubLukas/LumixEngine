@@ -21,6 +21,13 @@ struct GUIScene : IScene
 		RIGHT
 	};
 
+	enum class TextVAlign : int
+	{
+		TOP,
+		MIDDLE,
+		BOTTOM
+	};
+
 	struct Rect
 	{
 		float x, y, w, h;
@@ -67,8 +74,6 @@ struct GUIScene : IScene
 	virtual void setButtonNormalColorRGBA(EntityRef entity, const Vec4& color) = 0;
 	virtual Vec4 getButtonHoveredColorRGBA(EntityRef entity) = 0;
 	virtual void setButtonHoveredColorRGBA(EntityRef entity, const Vec4& color) = 0;
-	virtual void setButtonEvent(EntityRef entity, const char* text) = 0;
-	virtual const char* getButtonEvent(EntityRef entity) = 0;
 
 	virtual void enableImage(EntityRef entity, bool enable) = 0;
 	virtual bool isImageEnabled(EntityRef entity) = 0;
@@ -81,6 +86,8 @@ struct GUIScene : IScene
 	virtual const char* getText(EntityRef entity) = 0;
 	virtual TextHAlign getTextHAlign(EntityRef entity) = 0;
 	virtual void setTextHAlign(EntityRef entity, TextHAlign align) = 0;
+	virtual TextVAlign getTextVAlign(EntityRef entity) = 0;
+	virtual void setTextVAlign(EntityRef entity, TextVAlign align) = 0;
 	virtual void setTextFontSize(EntityRef entity, int value) = 0;
 	virtual int getTextFontSize(EntityRef entity) = 0;
 	virtual Vec4 getTextColorRGBA(EntityRef entity) = 0;
@@ -94,7 +101,6 @@ struct GUIScene : IScene
 	virtual DelegateList<void(EntityRef)>& rectHovered() = 0;
 	virtual DelegateList<void(EntityRef)>& rectHoveredOut() = 0;
 	virtual DelegateList<void(bool, i32, i32)>& mousedButtonUnhandled() = 0;
-	virtual DelegateList<void(u32)>& event() = 0;
 };
 
 

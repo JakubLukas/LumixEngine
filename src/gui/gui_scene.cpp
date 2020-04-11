@@ -22,6 +22,7 @@ namespace Lumix
 {
 
 
+static const ComponentType GUI_CANVAS_TYPE = Reflection::getComponentType("gui_canvas");
 static const ComponentType GUI_BUTTON_TYPE = Reflection::getComponentType("gui_button");
 static const ComponentType GUI_RECT_TYPE = Reflection::getComponentType("gui_rect");
 static const ComponentType GUI_RENDER_TARGET_TYPE = Reflection::getComponentType("gui_render_target");
@@ -82,6 +83,7 @@ struct GUIText
 
 	String text;
 	GUIScene::TextHAlign horizontal_align = GUIScene::TextHAlign::LEFT;
+	GUIScene::TextVAlign vertical_align = GUIScene::TextVAlign::TOP;
 	u32 color = 0xff000000;
 
 private:
@@ -93,12 +95,13 @@ private:
 
 struct GUIButton
 {
-	GUIButton(IAllocator& allocator) : event(allocator) {}
-
 	u32 normal_color = 0xffFFffFF;
 	u32 hovered_color = 0xffFFffFF;
-	String event;
-	u32 event_hash = 0;
+};
+
+
+struct GUICanvas {
+	EntityRef entity;
 };
 
 
@@ -111,6 +114,10 @@ struct GUIInputField
 
 struct GUIImage
 {
+	~GUIImage() {
+		if (sprite) sprite->getResourceManager().unload(*sprite);
+	}
+
 	enum Flags
 	{
 		IS_ENABLED = 1 << 1
@@ -158,11 +165,11 @@ struct GUISceneImpl final : GUIScene
 		, m_system(system)
 		, m_rects(allocator)
 		, m_buttons(allocator)
+		, m_canvas(allocator)
 		, m_rect_hovered(allocator)
 		, m_rect_hovered_out(allocator)
 		, m_unhandled_mouse_button(allocator)
 		, m_button_clicked(allocator)
-		, m_event(allocator)
 		, m_buttons_down_count(0)
 		, m_canvas_size(800, 600)
 	{
@@ -190,6 +197,10 @@ struct GUISceneImpl final : GUIScene
 			, this
 			, &GUISceneImpl::createButton
 			, &GUISceneImpl::destroyButton);
+		context.registerComponentType(GUI_CANVAS_TYPE
+			, this
+			, &GUISceneImpl::createCanvas
+			, &GUISceneImpl::destroyCanvas);
 		m_font_manager = (FontManager*)system.getEngine().getResourceManager().get(FontResource::TYPE);
 	}
 
@@ -275,8 +286,7 @@ struct GUISceneImpl final : GUIScene
 			draw.addImage(rect.render_target, { l, t }, { r, b }, {0, 0}, {1, 1}, Color::WHITE);
 		}
 
-		if (rect.text)
-		{
+		if (rect.text) {
 			Font* font = rect.text->getFont();
 			if (font) {
 				const char* text_cstr = rect.text->text.c_str();
@@ -284,8 +294,13 @@ struct GUISceneImpl final : GUIScene
 				Vec2 text_size = measureTextA(*font, text_cstr, nullptr);
 				Vec2 text_pos(l, t + font_size);
 
-				switch (rect.text->horizontal_align)
-				{
+				switch (rect.text->vertical_align) {
+					case TextVAlign::TOP: break;
+					case TextVAlign::MIDDLE: text_pos.y = (t + b + font_size) * 0.5f; break;
+					case TextVAlign::BOTTOM: text_pos.y = b; break;
+				}
+
+				switch (rect.text->horizontal_align) {
 					case TextHAlign::LEFT: break;
 					case TextHAlign::RIGHT: text_pos.x = r - text_size.x; break;
 					case TextHAlign::CENTER: text_pos.x = (r + l - text_size.x) * 0.5f; break;
@@ -311,14 +326,16 @@ struct GUISceneImpl final : GUIScene
 
 	IVec2 getCursorPosition() override { return m_cursor_pos; }
 
-	void render(Pipeline& pipeline, const Vec2& canvas_size) override
-	{
-		if (!m_root) return;
-
+	void render(Pipeline& pipeline, const Vec2& canvas_size) override {
 		m_canvas_size = canvas_size;
-		renderRect(*m_root, pipeline, {0, 0, canvas_size.x, canvas_size.y});
+		for (GUICanvas& canvas : m_canvas) {
+			const int idx = m_rects.find(canvas.entity);
+			if (idx >= 0) {
+				GUIRect* r = m_rects.at(idx);
+				renderRect(*r, pipeline, {0, 0, canvas_size.x, canvas_size.y});
+			}
+		}
 	}
-
 
 	Vec4 getButtonNormalColorRGBA(EntityRef entity) override
 	{
@@ -329,15 +346,6 @@ struct GUISceneImpl final : GUIScene
 	void setButtonNormalColorRGBA(EntityRef entity, const Vec4& color) override
 	{
 		m_buttons[entity].normal_color = RGBAVec4ToABGRu32(color);
-	}
-
-	void setButtonEvent(EntityRef entity, const char* text) override {
-		m_buttons[entity].event = text;
-		m_buttons[entity].event_hash = crc32(text);
-	}
-
-	const char* getButtonEvent(EntityRef entity) override {
-		return m_buttons[entity].event.c_str();
 	}
 
 	Vec4 getButtonHoveredColorRGBA(EntityRef entity) override
@@ -426,7 +434,7 @@ struct GUISceneImpl final : GUIScene
 	}
 
 
-	EntityPtr getRectAt(GUIRect& rect, const Vec2& pos, const Rect& parent_rect) const
+	EntityPtr getRectAt(const GUIRect& rect, const Vec2& pos, const Rect& parent_rect) const
 	{
 		if (!rect.flags.isSet(GUIRect::IS_VALID)) return INVALID_ENTITY;
 
@@ -457,13 +465,19 @@ struct GUISceneImpl final : GUIScene
 
 	EntityPtr getRectAt(const Vec2& pos, const Vec2& canvas_size) const override
 	{
-		if (!m_root) return INVALID_ENTITY;
-
-		return getRectAt(*m_root, pos, { 0, 0, canvas_size.x, canvas_size.y });
+		for (const GUICanvas& canvas : m_canvas) {
+			const int idx = m_rects.find(canvas.entity);
+			if (idx >= 0) {
+				const GUIRect* r = m_rects.at(idx);
+				const EntityPtr e = getRectAt(*r, pos, { 0, 0, canvas_size.x, canvas_size.y });
+				if (e.isValid()) return e;
+			}
+		}
+		return INVALID_ENTITY;
 	}
 
 
-	static Rect getRectOnCanvas(const Rect& parent_rect, GUIRect& rect)
+	static Rect getRectOnCanvas(const Rect& parent_rect, const GUIRect& rect)
 	{
 		float l = parent_rect.x + parent_rect.w * rect.left.relative + rect.left.points;
 		float r = parent_rect.x + parent_rect.w * rect.right.relative + rect.right.points;
@@ -568,9 +582,17 @@ struct GUISceneImpl final : GUIScene
 	{
 		GUIText* gui_text = m_rects[entity]->text;
 		return gui_text->horizontal_align;
-		
 	}
 
+	TextVAlign getTextVAlign(EntityRef entity) override {
+		GUIText* gui_text = m_rects[entity]->text;
+		return gui_text->vertical_align;
+	}
+
+	void setTextVAlign(EntityRef entity, TextVAlign align) override {
+		GUIText* gui_text = m_rects[entity]->text;
+		gui_text->vertical_align = align;
+	}
 
 	void setTextHAlign(EntityRef entity, TextHAlign value) override
 	{
@@ -673,7 +695,7 @@ struct GUISceneImpl final : GUIScene
 	}
 
 
-	bool handleMouseButtonEvent(const Rect& parent_rect, GUIRect& rect, const InputSystem::Event& event)
+	bool handleMouseButtonEvent(const Rect& parent_rect, const GUIRect& rect, const InputSystem::Event& event)
 	{
 		if (!rect.flags.isSet(GUIRect::IS_ENABLED)) return false;
 		const bool is_up = !event.data.button.down;
@@ -691,10 +713,6 @@ struct GUISceneImpl final : GUIScene
 				{
 					m_focused_entity = INVALID_ENTITY;
 					m_button_clicked.invoke(rect.entity);
-					const GUIButton& button = button_iter.value();
-					if (button.event.length() > 0) {
-						m_event.invoke(button.event_hash);
-					}
 				}
 				if (!is_up)
 				{
@@ -794,7 +812,6 @@ struct GUISceneImpl final : GUIScene
 
 	void handleInput()
 	{
-		if (!m_root) return;
 		InputSystem& input = m_system.getEngine().getInputSystem();
 		const InputSystem::Event* events = input.getEvents();
 		int events_count = input.getEventsCount();
@@ -812,7 +829,13 @@ struct GUISceneImpl final : GUIScene
 					{
 						Vec2 pos(event.data.axis.x_abs, event.data.axis.y_abs);
 						m_cursor_pos = IVec2((i32)pos.x, (i32)pos.y);
-						handleMouseAxisEvent({0, 0,  m_canvas_size.x, m_canvas_size.y }, *m_root, pos, old_pos);
+						for (const GUICanvas& canvas : m_canvas) {
+							const int idx = m_rects.find(canvas.entity);
+							if (idx >= 0) {
+								GUIRect* r = m_rects.at(idx);
+								handleMouseAxisEvent({0, 0,  m_canvas_size.x, m_canvas_size.y }, *r, pos, old_pos);
+							}
+						}
 						old_pos = pos;
 					}
 					break;
@@ -824,12 +847,19 @@ struct GUISceneImpl final : GUIScene
 							m_mouse_down_pos.x = event.data.button.x;
 							m_mouse_down_pos.y = event.data.button.y;
 						}
-						const bool handled = handleMouseButtonEvent({ 0, 0, m_canvas_size.x, m_canvas_size.y }, *m_root, event);
-						if (!event.data.button.down) m_buttons_down_count = 0;
-
+						bool handled = false;
+						for (const GUICanvas& canvas : m_canvas) {
+							const int idx = m_rects.find(canvas.entity);
+							if (idx >= 0) {
+								GUIRect* r = m_rects.at(idx);
+								handled = handleMouseButtonEvent({ 0, 0, m_canvas_size.x, m_canvas_size.y }, *r, event);
+								if (handled) break;
+							}
+						}
 						if (!handled) {
 							m_unhandled_mouse_button.invoke(event.data.button.down, (i32)event.data.button.x, (i32)event.data.button.y);
 						}
+						if (!event.data.button.down) m_buttons_down_count = 0;
 					}
 					else if (event.device->type == InputSystem::Device::KEYBOARD)
 					{
@@ -858,7 +888,6 @@ struct GUISceneImpl final : GUIScene
 	{
 		if (paused) return;
 
-		m_root = findRoot();
 		handleInput();
 		blinkCursor(time_delta);
 	}
@@ -882,7 +911,6 @@ struct GUISceneImpl final : GUIScene
 		rect->flags.set(GUIRect::IS_VALID);
 		rect->flags.set(GUIRect::IS_ENABLED);
 		m_universe.onComponentCreated(entity, GUI_RECT_TYPE, this);
-		m_root = findRoot();
 	}
 
 
@@ -923,7 +951,7 @@ struct GUISceneImpl final : GUIScene
 			idx = m_rects.find(entity);
 		}
 		GUIImage* image = m_rects.at(idx)->image;
-		GUIButton& button = m_buttons.insert(entity, GUIButton(m_allocator));
+		GUIButton& button = m_buttons.insert(entity, GUIButton());
 		if (image)
 		{
 			button.hovered_color = image->color;
@@ -931,7 +959,13 @@ struct GUISceneImpl final : GUIScene
 		}
 		m_universe.onComponentCreated(entity, GUI_BUTTON_TYPE, this);
 	}
+	
 
+	void createCanvas(EntityRef entity)
+	{
+		m_canvas.insert(entity).entity = entity;
+		m_universe.onComponentCreated(entity, GUI_CANVAS_TYPE, this);
+	}
 
 	void createInputField(EntityRef entity)
 	{
@@ -989,10 +1023,6 @@ struct GUISceneImpl final : GUIScene
 			LUMIX_DELETE(m_allocator, rect);
 			m_rects.erase(entity);
 		}
-		if (rect == m_root)
-		{
-			m_root = findRoot();
-		}
 		m_universe.onComponentDestroyed(entity, GUI_RECT_TYPE, this);
 	}
 
@@ -1003,6 +1033,10 @@ struct GUISceneImpl final : GUIScene
 		m_universe.onComponentDestroyed(entity, GUI_BUTTON_TYPE, this);
 	}
 
+	void destroyCanvas(EntityRef entity) {
+		m_canvas.erase(entity);
+		m_universe.onComponentDestroyed(entity, GUI_CANVAS_TYPE, this);
+	}
 
 	void destroyRenderTarget(EntityRef entity)
 	{
@@ -1066,6 +1100,7 @@ struct GUISceneImpl final : GUIScene
 			{
 				serializer.writeString(rect->text->getFontResource() ? rect->text->getFontResource()->getPath().c_str() : "");
 				serializer.write(rect->text->horizontal_align);
+				serializer.write(rect->text->vertical_align);
 				serializer.write(rect->text->color);
 				serializer.write(rect->text->getFontSize());
 				serializer.write(rect->text->text);
@@ -1080,9 +1115,13 @@ struct GUISceneImpl final : GUIScene
 			const GUIButton& button = iter.value();
 			serializer.write(button.normal_color);
 			serializer.write(button.hovered_color);
-			serializer.write(button.event);
 		}
 
+		serializer.write(m_canvas.size());
+		
+		for (GUICanvas& c : m_canvas) {
+			serializer.write(c);
+		}
 	}
 
 
@@ -1138,6 +1177,7 @@ struct GUISceneImpl final : GUIScene
 				GUIText& text = *rect->text;
 				const char* tmp = serializer.readString();
 				serializer.read(text.horizontal_align);
+				serializer.read(text.vertical_align);
 				serializer.read(text.color);
 				int font_size;
 				serializer.read(font_size);
@@ -1148,20 +1188,27 @@ struct GUISceneImpl final : GUIScene
 				m_universe.onComponentCreated(rect->entity, GUI_TEXT_TYPE, this);
 			}
 		}
+		
 		count = serializer.read<u32>();
-		for (u32 i = 0; i < count; ++i)
-		{
+		for (u32 i = 0; i < count; ++i) {
 			EntityRef e;
 			serializer.read(e);
 			e = entity_map.get(e);
-			GUIButton& button = m_buttons.insert(e, GUIButton(m_allocator));
+			GUIButton& button = m_buttons.insert(e, GUIButton());
 			serializer.read(button.normal_color);
 			serializer.read(button.hovered_color);
-			serializer.read(button.event);
-			button.event_hash = button.event.length() > 0 ? crc32(button.event.c_str()) : 0;
 			m_universe.onComponentCreated(e, GUI_BUTTON_TYPE, this);
 		}
-		m_root = findRoot();
+		
+		count = serializer.read<u32>();
+		for (u32 i = 0; i < count; ++i) {
+			GUICanvas canvas;
+			serializer.read(canvas);
+			canvas.entity = entity_map.get(canvas.entity);
+			m_canvas.insert(canvas.entity) = canvas;
+			
+			m_universe.onComponentCreated(canvas.entity, GUI_CANVAS_TYPE, this);
+		}
 	}
 	
 
@@ -1175,7 +1222,6 @@ struct GUISceneImpl final : GUIScene
 	DelegateList<void(EntityRef)>& rectHovered() override { return m_rect_hovered; }
 	DelegateList<void(EntityRef)>& rectHoveredOut() override { return m_rect_hovered_out; }
 	DelegateList<void(bool, int, int)>& mousedButtonUnhandled() override { return m_unhandled_mouse_button; }
-	DelegateList<void(u32)>& event() override { return m_event; }
 
 	Universe& getUniverse() override { return m_universe; }
 	IPlugin& getPlugin() const override { return m_system; }
@@ -1186,10 +1232,10 @@ struct GUISceneImpl final : GUIScene
 	
 	AssociativeArray<EntityRef, GUIRect*> m_rects;
 	HashMap<EntityRef, GUIButton> m_buttons;
+	AssociativeArray<EntityRef, GUICanvas> m_canvas;
 	EntityRef m_buttons_down[16];
 	u32 m_buttons_down_count;
 	EntityPtr m_focused_entity = INVALID_ENTITY;
-	GUIRect* m_root = nullptr;
 	IVec2 m_cursor_pos;
 	FontManager* m_font_manager = nullptr;
 	Vec2 m_canvas_size;
@@ -1198,7 +1244,6 @@ struct GUISceneImpl final : GUIScene
 	DelegateList<void(EntityRef)> m_rect_hovered;
 	DelegateList<void(EntityRef)> m_rect_hovered_out;
 	DelegateList<void(bool, i32, i32)> m_unhandled_mouse_button;
-	DelegateList<void(u32)> m_event;
 };
 
 

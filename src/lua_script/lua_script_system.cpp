@@ -156,7 +156,10 @@ namespace Lumix
 			}
 
 			~ScriptInstance() {
-				if (m_script) m_script->getObserverCb().unbind<&ScriptComponent::onScriptLoaded>(m_cmp);
+				if (m_script) {
+					m_script->getObserverCb().unbind<&ScriptComponent::onScriptLoaded>(m_cmp);
+					m_script->getResourceManager().unload(*m_script);
+				}
 
 				lua_rawgeti(m_state, LUA_REGISTRYINDEX, m_environment); // [env]
 				ASSERT(lua_type(m_state, -1) == LUA_TTABLE);
@@ -419,11 +422,7 @@ namespace Lumix
 			auto& script = m_function_call.cmp->m_scripts[m_function_call.scr_index];
 			if (!script.m_state) return;
 
-			if (lua_pcall(script.m_state, m_function_call.parameter_count, 0, 0) != 0)
-			{
-				logError("Lua Script") << lua_tostring(script.m_state, -1);
-				lua_pop(script.m_state, 1);
-			}
+			LuaWrapper::pcall(script.m_state, m_function_call.parameter_count, 0);
 			lua_pop(script.m_state, 1);
 		}
 
@@ -532,18 +531,66 @@ namespace Lumix
 			LuaWrapper::createSystemVariable(L, "Editor", "RESOURCE_PROPERTY", Property::RESOURCE);
 		}
 
+		static int rescan(lua_State* L) {
+			const auto* universe = LuaWrapper::checkArg<Universe*>(L, 1);
+			const EntityRef entity = LuaWrapper::checkArg<EntityRef>(L, 2);
+			const int scr_index = LuaWrapper::checkArg<int>(L, 3);
+
+			if (!universe->hasComponent(entity, LUA_SCRIPT_TYPE)) {
+				return 0;
+			}
+			
+			LuaScriptSceneImpl* scene = (LuaScriptSceneImpl*)universe->getScene(LUA_SCRIPT_TYPE);
+
+			const int count = scene->getScriptCount(entity);
+			if (scr_index >= count) {
+				return 0;
+			}
+
+			/////
+			const ScriptInstance& instance = scene->m_scripts[entity]->m_scripts[scr_index];
+			LuaWrapper::DebugGuard guard(instance.m_state);
+			lua_rawgeti(instance.m_state, LUA_REGISTRYINDEX, instance.m_environment);
+			if (lua_type(instance.m_state, -1) != LUA_TTABLE) {
+				ASSERT(false);
+				lua_pop(instance.m_state, 1);
+				return 0;
+			}
+			lua_getfield(instance.m_state, -1, "update");
+			if (lua_type(instance.m_state, -1) == LUA_TFUNCTION) {
+				auto& update_data = scene->m_updates.emplace();
+				update_data.script = instance.m_script;
+				update_data.state = instance.m_state;
+				update_data.environment = instance.m_environment;
+			}
+			lua_pop(instance.m_state, 1);
+			lua_getfield(instance.m_state, -1, "onInputEvent");
+			if (lua_type(instance.m_state, -1) == LUA_TFUNCTION) {
+				auto& callback = scene->m_input_handlers.emplace();
+				callback.script = instance.m_script;
+				callback.state = instance.m_state;
+				callback.environment = instance.m_environment;
+			}
+			lua_pop(instance.m_state, 1);
+			lua_pop(instance.m_state, 1);
+
+			return 0;
+		}
 
 		static int getEnvironment(lua_State* L)
 		{
-			auto* scene = LuaWrapper::checkArg<LuaScriptScene*>(L, 1);
+			auto* universe = LuaWrapper::checkArg<Universe*>(L, 1);
 			EntityRef entity = LuaWrapper::checkArg<EntityRef>(L, 2);
 			int scr_index = LuaWrapper::checkArg<int>(L, 3);
 
-			if (!scene->getUniverse().hasComponent(entity, LUA_SCRIPT_TYPE))
+			if (!universe->hasComponent(entity, LUA_SCRIPT_TYPE))
 			{
 				lua_pushnil(L);
 				return 1;
 			}
+			
+			LuaScriptScene* scene = (LuaScriptScene*)universe->getScene(LUA_SCRIPT_TYPE);
+
 			int count = scene->getScriptCount(entity);
 			if (scr_index >= count)
 			{
@@ -837,8 +884,8 @@ namespace Lumix
 			
 			registerProperties();
 			registerPropertyAPI();
-			LuaWrapper::createSystemFunction(
-				engine_state, "LuaScript", "getEnvironment", &LuaScriptSceneImpl::getEnvironment);
+			LuaWrapper::createSystemFunction(engine_state, "LuaScript", "getEnvironment", &LuaScriptSceneImpl::getEnvironment);
+			LuaWrapper::createSystemFunction(engine_state, "LuaScript", "rescan", &LuaScriptSceneImpl::rescan);
 			
 			#define REGISTER_FUNCTION(F) \
 				do { \
@@ -1304,6 +1351,7 @@ namespace Lumix
 					for (Property& prop : scr.m_properties)
 					{
 						serializer.write(prop.name_hash);
+						serializer.write(prop.type);
 						int idx = m_property_names.find(prop.name_hash);
 						if (idx >= 0)
 						{
@@ -1351,9 +1399,19 @@ namespace Lumix
 						Property& prop = scr.m_properties.emplace(allocator);
 						prop.type = Property::ANY;
 						serializer.read(prop.name_hash);
+						Property::Type type;
+						serializer.read(type);
 						const char* tmp = serializer.readString();
-						// TODO map entities if property is of entity type
-						prop.stored_value = tmp;
+						if (type == Property::ENTITY) {
+							EntityPtr entity;
+							fromCString(Span(tmp, stringLength(tmp)), Ref(entity.index));
+							entity = entity_map.get(entity);
+							StaticString<64> buf(entity.index);
+							prop.stored_value = buf;
+						}
+						else {
+							prop.stored_value = tmp;
+						}
 					}
 					setScriptPath(*script, scr, Path(tmp));
 				}
@@ -1530,6 +1588,7 @@ namespace Lumix
 			for (int i = 0; i < m_updates.size(); ++i)
 			{
 				CallbackData update_item = m_updates[i];
+				LuaWrapper::DebugGuard guard(update_item.state, 0);
 				lua_rawgeti(update_item.state, LUA_REGISTRYINDEX, update_item.environment);
 				if (lua_type(update_item.state, -1) != LUA_TTABLE)
 				{
@@ -1543,11 +1602,7 @@ namespace Lumix
 				}
 
 				lua_pushnumber(update_item.state, time_delta);
-				if (lua_pcall(update_item.state, 1, 0, 0) != 0)
-				{
-					logError("Lua Script") << lua_tostring(update_item.state, -1);
-					lua_pop(update_item.state, 1);
-				}
+				LuaWrapper::pcall(update_item.state, 1, 0);
 				lua_pop(update_item.state, 1);
 			}
 

@@ -134,6 +134,7 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 			const Reflection::IDynamicProperties::Type type = prop.getType(cmp, m_index, i);
 			switch(type) {
 				case Reflection::IDynamicProperties::FLOAT: dynamicProperty<float>(cmp, prop, i); break;
+				case Reflection::IDynamicProperties::BOOLEAN: dynamicProperty<bool>(cmp, prop, i); break;
 				case Reflection::IDynamicProperties::ENTITY: dynamicProperty<EntityPtr>(cmp, prop, i); break;
 				case Reflection::IDynamicProperties::I32: dynamicProperty<i32>(cmp, prop, i); break;
 				case Reflection::IDynamicProperties::STRING: dynamicProperty<const char*>(cmp, prop, i); break;
@@ -398,7 +399,7 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 
 		if (attrs.resource_type != INVALID_RESOURCE_TYPE)
 		{
-			if (m_app.getAssetBrowser().resourceInput(prop.name, StaticString<20>("", (u64)&prop), Span(tmp), attrs.resource_type))
+			if (m_app.getAssetBrowser().resourceInput(prop.name, prop.name, Span(tmp), attrs.resource_type))
 			{
 				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, Path(tmp));
 			}
