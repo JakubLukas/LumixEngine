@@ -33,6 +33,7 @@
 #include "renderer/font.h"
 #include "renderer/material.h"
 #include "renderer/model.h"
+#include "renderer/pose.h"
 #include "renderer/particle_system.h"
 #include "renderer/pipeline.h"
 #include "renderer/render_scene.h"
@@ -3795,6 +3796,44 @@ struct StudioAppPlugin : StudioApp::IPlugin
 		addSphere(view, pos, range, Color::BLUE);
 	}
 
+	void showSkeletonGizmo(UniverseView& view, ComponentUID cmp)
+	{
+		RenderScene* scene = static_cast<RenderScene*>(cmp.scene);
+		Universe& universe = scene->getUniverse();
+
+		const EntityRef entity = (EntityRef)cmp.entity;
+		const DVec3& pos = universe.getPosition(entity);
+		const Quat& rot = universe.getRotation(entity);
+
+		Model* model = scene->getModelInstanceModel(entity);
+		if (model->isReady())
+		{
+			Pose* pose = scene->lockPose(entity);
+			if (pose)
+			{
+				const Quat* rots = pose->rotations;
+				const Vec3* poss = pose->positions;
+				for (u32 i = 0; i < pose->count; ++i)
+				{
+					const Model::Bone& bone = model->getBone(i);
+					DVec3 bone_parent_pos = pos + rot * poss[bone.parent_idx];
+					DVec3 bone_pos = pos + rot * poss[i];
+					addLine(view, bone_pos, bone_parent_pos, Color::WHITE);
+
+					const float axis_size = 0.05f;
+					DVec3 bone_x = bone_pos + rot * rots[i] * Vec3(axis_size, 0, 0);
+					DVec3 bone_y = bone_pos + rot * rots[i] * Vec3(0, axis_size, 0);
+					DVec3 bone_z = bone_pos + rot * rots[i] * Vec3(0, 0, axis_size);
+					addLine(view, bone_pos, bone_x, Color::RED);
+					addLine(view, bone_pos, bone_y, Color::GREEN);
+					addLine(view, bone_pos, bone_z, Color::BLUE);
+				}
+
+				scene->unlockPose(entity, false);
+			}
+		}
+	}
+
 
 	static Vec3 minCoords(const Vec3& a, const Vec3& b)
 	{
@@ -3883,6 +3922,10 @@ struct StudioAppPlugin : StudioApp::IPlugin
 		}
 		if (cmp.type == LIGHT_PROBE_GRID_TYPE) {
 			showLightProbeGridGizmo(view, cmp);
+			return true;
+		}
+		if (cmp.type == MODEL_INSTANCE_TYPE) {
+			showSkeletonGizmo(view, cmp);
 			return true;
 		}
 		return false;
