@@ -111,9 +111,10 @@ struct LUMIX_EDITOR_API StudioApp : OS::Interface
 	virtual GUIPlugin* getPlugin(const char* name) = 0;
 	virtual Span<MousePlugin*> getMousePlugins() = 0;
 	virtual const char* getComponentTypeName(ComponentType cmp_type) const = 0;
-	virtual void registerComponent(const char* id, const char* label) = 0;
-	virtual void registerComponent(const char* id, IAddComponentPlugin& plugin) = 0;
-	virtual void registerComponent(const char* id, const char* label, ResourceType resource_type, const char* property) = 0;
+	virtual const char* getComponentIcon(ComponentType cmp_type) const = 0;
+	virtual void registerComponent(const char* icon, const char* id, const char* label) = 0;
+	virtual void registerComponent(const char* icon, const char* id, IAddComponentPlugin& plugin) = 0;
+	virtual void registerComponent(const char* icon, const char* id, const char* label, ResourceType resource_type, const char* property) = 0;
 	virtual const AddCmpTreeNode& getAddComponentTreeRoot() const = 0;
 	virtual int getExitCode() const = 0;
 	virtual void runScript(const char* src, const char* script_name) = 0;
@@ -132,11 +133,14 @@ struct LUMIX_EDITOR_API StudioApp : OS::Interface
 	virtual float getFOV() const = 0;
 	virtual void setFOV(float fov_radians) = 0;
 	virtual Gizmo::Config& getGizmoConfig() = 0;
+	virtual void setCursorCaptured(bool captured) = 0;
+	virtual void saveSettings() = 0;
 
 	virtual const OS::Event* getEvents() const = 0;
 	virtual int getEventsCount() const = 0;
 	virtual ~StudioApp() {}
 	virtual ImFont* getBoldFont() = 0;
+	virtual ImFont* getBigIconFont() = 0;
 };
 
 

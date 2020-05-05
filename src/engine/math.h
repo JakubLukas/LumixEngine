@@ -290,6 +290,7 @@ struct LUMIX_ENGINE_API DVec3
 	DVec3 operator-() const { return {-x, -y, -z}; }
 	DVec3 operator*(float rhs) const { return {x * rhs, y * rhs, z * rhs}; }
 	DVec3 operator/(float rhs) const { return {x / rhs, y / rhs, z / rhs}; }
+	DVec3 operator/(const DVec3& rhs) const { return {x / rhs.x, y / rhs.y, z / rhs.z}; }
 	DVec3 operator-(const DVec3& rhs) const { return {x - rhs.x, y - rhs.y, z - rhs.z }; }
 	DVec3 operator+(const DVec3& rhs) const { return {x + rhs.x, y + rhs.y, z + rhs.z }; }
 	DVec3 operator-(const Vec3& rhs) const { return {x - rhs.x, y - rhs.y, z - rhs.z }; }
@@ -1065,7 +1066,7 @@ LUMIX_ENGINE_API bool getRaySphereIntersection(const Vec3& origin,
 	const Vec3& dir,
 	const Vec3& center,
 	float radius,
-	Vec3& out);
+	Ref<float> out);
 
 
 LUMIX_ENGINE_API bool getRayAABBIntersection(const Vec3& origin,
@@ -1147,7 +1148,7 @@ template <typename T> LUMIX_FORCE_INLINE T signum(T a)
 }
 
 
-template <typename T> LUMIX_FORCE_INLINE T clamp(T value, T min_value, T max_value)
+template <typename T1, typename T2, typename T3> LUMIX_FORCE_INLINE T1 clamp(T1 value, T2 min_value, T3 max_value)
 {
 	return minimum(maximum(value, min_value), max_value);
 }

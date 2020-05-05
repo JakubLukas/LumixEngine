@@ -1,6 +1,7 @@
 #include <imgui/imgui.h>
 
 #include "terrain_editor.h"
+#include "editor/asset_browser.h"
 #include "editor/asset_compiler.h"
 #include "editor/prefab_system.h"
 #include "editor/studio_app.h"
@@ -19,6 +20,7 @@
 #include "engine/universe.h"
 #include "physics/physics_scene.h"
 #include "renderer/culling_system.h"
+#include "renderer/editor/composite_texture.h"
 #include "renderer/material.h"
 #include "renderer/model.h"
 #include "renderer/render_scene.h"
@@ -37,6 +39,7 @@ static const ComponentType HEIGHTFIELD_TYPE = Reflection::getComponentType("phys
 static const char* HEIGHTMAP_SLOT_NAME = "Heightmap";
 static const char* SPLATMAP_SLOT_NAME = "Splatmap";
 static const char* DETAIL_ALBEDO_SLOT_NAME = "Detail albedo";
+static const char* DETAIL_NORMAL_SLOT_NAME = "Detail normal";
 static const float MIN_BRUSH_SIZE = 0.5f;
 
 
@@ -51,18 +54,9 @@ struct PaintTerrainCommand final : IEditorCommand
 	};
 
 
-	explicit PaintTerrainCommand(WorldEditor& editor)
-		: m_world_editor(editor)
-		, m_new_data(editor.getAllocator())
-		, m_old_data(editor.getAllocator())
-		, m_items(editor.getAllocator())
-		, m_mask(editor.getAllocator())
-	{
-	}
-
-
 	PaintTerrainCommand(WorldEditor& editor,
 		TerrainEditor::ActionType action_type,
+		u16 grass_mask,
 		u64 textures_mask,
 		const DVec3& hit_pos,
 		const Array<bool>& mask,
@@ -82,7 +76,7 @@ struct PaintTerrainCommand final : IEditorCommand
 		, m_items(editor.getAllocator())
 		, m_action_type(action_type)
 		, m_textures_mask(textures_mask)
-		, m_grass_mask((u16)textures_mask)
+		, m_grass_mask(grass_mask)
 		, m_mask(editor.getAllocator())
 		, m_flat_height(flat_height)
 		, m_layers_masks(layers_mask)
@@ -182,7 +176,6 @@ private:
 		switch (m_action_type)
 		{
 			case TerrainEditor::REMOVE_GRASS:
-			case TerrainEditor::ADD_GRASS:
 			case TerrainEditor::LAYER:
 				uniform_name = SPLATMAP_SLOT_NAME;
 				break;
@@ -260,45 +253,44 @@ private:
 
 		for (int i = r.from_x, end = r.to_x; i < end; ++i, fx += fstepx) {
 			float fy = 0;
-			
 			for (int j = r.from_y, end2 = r.to_y; j < end2; ++j, fy += fstepy) {
-				if (isMasked(fx, fy)) {
-					for (u32 layer = 0; layer < 2; ++layer) {
-						if ((m_layers_masks & (1 << layer)) == 0) continue;
-						const int offset = 4 * (i - m_x + (j - m_y) * m_width) + layer;
-						const float attenuation = getAttenuation(item, i, j, texture_size);
-						int add = int(attenuation * item.m_amount * 255);
+				if (!isMasked(fx, fy)) continue;
+
+				const int offset = 4 * (i - m_x + (j - m_y) * m_width);
+				for (u32 layer = 0; layer < 2; ++layer) {
+					if ((m_layers_masks & (1 << layer)) == 0) continue;
 					
-						if (add > 0) {
-							if (((u64)1 << data[offset]) & m_textures_mask) {
-								if (layer == 1) {
-									if (m_fixed_value.x >= 0) {
-										data[offset + 1] = (u8)clamp(randFloat(m_fixed_value.x, m_fixed_value.y) * 255.f, 0.f, 255.f);
-									}
-									else {
-										data[offset + 1] += minimum(255 - data[offset + 1], add);
-									}
-								}
+					const float attenuation = getAttenuation(item, i, j, texture_size);
+					int add = int(attenuation * item.m_amount * 255);
+					if (add <= 0) continue;
+
+					if (((u64)1 << data[offset]) & m_textures_mask) {
+						if (layer == 1) {
+							if (m_fixed_value.x >= 0) {
+								data[offset + 1] = (u8)clamp(randFloat(m_fixed_value.x, m_fixed_value.y) * 255.f, 0.f, 255.f);
 							}
 							else {
-								if (layer == 1) {
-									if (m_fixed_value.x >= 0) {
-										data[offset + 1] = (u8)clamp(randFloat(m_fixed_value.x, m_fixed_value.y) * 255.f, 0.f, 255.f);
-									}
-									else {
-										data[offset + 1] = add;
-									}
-								}
-								data[offset] = tex[rand() % tex_count];
+								data[offset + 1] += minimum(255 - data[offset + 1], add);
 							}
 						}
+					}
+					else {
+						if (layer == 1) {
+							if (m_fixed_value.x >= 0) {
+								data[offset + 1] = (u8)clamp(randFloat(m_fixed_value.x, m_fixed_value.y) * 255.f, 0.f, 255.f);
+							}
+							else {
+								data[offset + 1] = add;
+							}
+						}
+						data[offset] = tex[rand() % tex_count];
 					}
 				}
 			}
 		}
 	}
 
-	void rasterGrassItem(Texture* texture, Array<u8>& data, Item& item, TerrainEditor::ActionType action_type)
+	void rasterGrassItem(Texture* texture, Array<u8>& data, Item& item, bool remove)
 	{
 		int texture_size = texture->width;
 		Rectangle r = item.getBoundingRectangle(texture_size);
@@ -312,25 +304,19 @@ private:
 		float fx = 0;
 		float fstepx = 1.0f / (r.to_x - r.from_x);
 		float fstepy = 1.0f / (r.to_y - r.from_y);
-		for (int i = r.from_x, end = r.to_x; i < end; ++i, fx += fstepx)
-		{
+		for (int i = r.from_x, end = r.to_x; i < end; ++i, fx += fstepx) {
 			float fy = 0;
-			for (int j = r.from_y, end2 = r.to_y; j < end2; ++j, fy += fstepy)
-			{
-				if (isMasked(fx, fy))
-				{
+			for (int j = r.from_y, end2 = r.to_y; j < end2; ++j, fy += fstepy) {
+				if (isMasked(fx, fy)) {
 					int offset = 4 * (i - m_x + (j - m_y) * m_width) + 2;
 					float attenuation = getAttenuation(item, i, j, texture_size);
 					int add = int(attenuation * item.m_amount * 255);
-					if (add > 0)
-					{
+					if (add > 0) {
 						u16* tmp = ((u16*)&data[offset]);
-						if (m_action_type == TerrainEditor::REMOVE_GRASS)
-						{
+						if (remove) {
 							*tmp &= ~m_grass_mask;
 						}
-						else
-						{
+						else {
 							*tmp |= m_grass_mask;
 						}
 					}
@@ -389,14 +375,14 @@ private:
 
 	void rasterItem(Texture* texture, Array<u8>& data, Item& item)
 	{
-		if (m_action_type == TerrainEditor::LAYER)
+		if (m_action_type == TerrainEditor::LAYER || m_action_type == TerrainEditor::REMOVE_GRASS)
 		{
-			rasterLayerItem(texture, data, item);
-			return;
-		}
-		else if (m_action_type == TerrainEditor::ADD_GRASS || m_action_type == TerrainEditor::REMOVE_GRASS)
-		{
-			rasterGrassItem(texture, data, item, m_action_type);
+			if (m_textures_mask) {
+				rasterLayerItem(texture, data, item);
+			}
+			if (m_grass_mask) {
+				rasterGrassItem(texture, data, item, m_action_type == TerrainEditor::REMOVE_GRASS);
+			}
 			return;
 		}
 		else if (m_action_type == TerrainEditor::SMOOTH_HEIGHT)
@@ -503,7 +489,7 @@ private:
 		const EntityRef e = (EntityRef)m_terrain.entity;
 		static_cast<RenderScene*>(m_terrain.scene)->forceGrassUpdate(e);
 
-		if (m_action_type != TerrainEditor::LAYER && m_action_type != TerrainEditor::ADD_GRASS && m_action_type != TerrainEditor::REMOVE_GRASS)
+		if (m_action_type != TerrainEditor::LAYER && m_action_type != TerrainEditor::REMOVE_GRASS)
 		{
 			IScene* scene = m_world_editor.getUniverse()->getScene(crc32("physics"));
 			if (!scene) return;
@@ -636,16 +622,8 @@ TerrainEditor::TerrainEditor(WorldEditor& editor, StudioApp& app)
 	, m_is_enabled(false)
 	, m_size_spread(1, 1)
 	, m_y_spread(0, 0)
+	, m_albedo_composite(editor.getAllocator())
 {
-	m_increase_brush_size = LUMIX_NEW(editor.getAllocator(), Action)("Increase brush size", "Terrain editor - Increase brush size", "increaseBrushSize");
-	m_increase_brush_size->is_global = false;
-	m_increase_brush_size->func.bind<&TerrainEditor::increaseBrushSize>(this);
-	m_decrease_brush_size = LUMIX_NEW(editor.getAllocator(), Action)("Decrease brush size", "Terrain editor - decrease brush size", "decreaseBrushSize");
-	m_decrease_brush_size->func.bind<&TerrainEditor::decreaseBrushSize>(this);
-	m_decrease_brush_size->is_global = false;
-	app.addAction(m_increase_brush_size);
-	app.addAction(m_decrease_brush_size);
-
 	m_smooth_terrain_action = LUMIX_NEW(editor.getAllocator(), Action)("Smooth terrain", "Terrain editor - smooth", "smoothTerrain");
 	m_smooth_terrain_action->is_global = false;
 	m_lower_terrain_action = LUMIX_NEW(editor.getAllocator(), Action)("Lower terrain", "Terrain editor - lower", "lowerTerrain");
@@ -666,7 +644,6 @@ TerrainEditor::TerrainEditor(WorldEditor& editor, StudioApp& app)
 	app.addPlugin(*this);
 	m_terrain_brush_size = 10;
 	m_terrain_brush_strength = 0.1f;
-	m_action_type = RAISE_HEIGHT;
 	m_textures_mask = 0b1;
 	m_layers_mask = 0b1;
 	m_grass_mask = 1;
@@ -707,7 +684,7 @@ void TerrainEditor::drawCursor(RenderScene& scene, EntityRef terrain, const DVec
 	PROFILE_FUNCTION();
 	constexpr int SLICE_COUNT = 30;
 	constexpr float angle_step = PI * 2 / SLICE_COUNT;
-	if (m_action_type == TerrainEditor::FLAT_HEIGHT && ImGui::GetIO().KeyCtrl) {
+	if (m_mode == Mode::HEIGHT && m_is_flat_height && ImGui::GetIO().KeyCtrl) {
 		scene.addDebugCross(center, 1.0f, 0xff0000ff);
 		return;
 	}
@@ -730,53 +707,6 @@ void TerrainEditor::drawCursor(RenderScene& scene, EntityRef terrain, const DVec
 		const DVec3 from = terrain_transform.transform(local_from);
 		const DVec3 to = terrain_transform.transform(local_to);
 		scene.addDebugLine(from, to, 0xffff0000);
-	}
-}
-
-
-void TerrainEditor::detectModifiers()
-{
-	bool is_height_tool = m_action_type == LOWER_HEIGHT || m_action_type == RAISE_HEIGHT ||
-						  m_action_type == SMOOTH_HEIGHT;
-	if (is_height_tool)
-	{
-		if (m_lower_terrain_action->isActive())
-		{
-			m_action_type = LOWER_HEIGHT;
-		}
-		else if (m_smooth_terrain_action->isActive())
-		{
-			m_action_type = SMOOTH_HEIGHT;
-		}
-		else
-		{
-			m_action_type = RAISE_HEIGHT;
-		}
-	}
-
-	if (m_action_type == ADD_GRASS || m_action_type == REMOVE_GRASS)
-	{
-		if (m_remove_grass_action->isActive())
-		{
-			m_action_type = REMOVE_GRASS;
-		}
-		else
-		{
-			m_action_type = ADD_GRASS;
-		}
-	}
-
-	bool is_entity_tool = m_action_type == ENTITY || m_action_type == REMOVE_ENTITY;
-	if (is_entity_tool)
-	{
-		if (m_remove_entity_action->isActive())
-		{
-			m_action_type = REMOVE_ENTITY;
-		}
-		else
-		{
-			m_action_type = ENTITY;
-		}
 	}
 }
 
@@ -818,31 +748,46 @@ bool TerrainEditor::onMouseDown(UniverseView& view, int x, int y)
 	if (selected_entities.size() != 1) return false;
 	bool is_terrain = m_world_editor.getUniverse()->hasComponent(selected_entities[0], TERRAIN_TYPE);
 	if (!is_terrain) return false;
-	if (m_action_type == NOT_SET || !m_component.isValid()) return false;
-
-	detectModifiers();
+	if (!m_component.isValid()) return false;
 
 	if ((EntityPtr)selected_entities[0] == hit.entity && m_component.isValid()) {
 		const DVec3 hit_pos = hit.pos;
-		switch (m_action_type)
-		{
-			case FLAT_HEIGHT:
-				if (ImGui::GetIO().KeyCtrl) {
-					m_flat_height = getHeight(hit_pos);
+		switch(m_mode) {
+			case Mode::ENTITY:
+				if (m_remove_entity_action->isActive()) {
+					removeEntities(hit.pos);
 				}
 				else {
-					paint(hit.pos, m_action_type, false);
+					paintEntities(hit.pos);
 				}
 				break;
-			case RAISE_HEIGHT:
-			case LOWER_HEIGHT:
-			case SMOOTH_HEIGHT:
-			case REMOVE_GRASS:
-			case ADD_GRASS:
-			case LAYER: paint(hit.pos, m_action_type, false); break;
-			case ENTITY: paintEntities(hit.pos); break;
-			case REMOVE_ENTITY: removeEntities(hit.pos); break;
-			default: ASSERT(false); break;
+			case Mode::HEIGHT:
+				if (m_is_flat_height) {
+					if (ImGui::GetIO().KeyCtrl) {
+						m_flat_height = getHeight(hit_pos);
+					}
+					else {
+						paint(hit.pos, TerrainEditor::FLAT_HEIGHT, false);
+					}
+				}
+				else {
+					TerrainEditor::ActionType action = TerrainEditor::RAISE_HEIGHT;
+					if (m_lower_terrain_action->isActive()) {
+						action = TerrainEditor::LOWER_HEIGHT;
+					}
+					else if (m_smooth_terrain_action->isActive()) {
+						action = TerrainEditor::SMOOTH_HEIGHT;
+					}
+					paint(hit.pos, action, false); break;
+				}
+				break;
+			case Mode::LAYER:
+				TerrainEditor::ActionType action = TerrainEditor::LAYER;
+				if (m_remove_grass_action->isActive()) {
+					action = TerrainEditor::REMOVE_GRASS;
+				}
+				paint(hit.pos, action, false);
+				break;
 		}
 		return true;
 	}
@@ -1103,8 +1048,6 @@ void TerrainEditor::onMouseMove(UniverseView& view, int x, int y, int, int)
 {
 	if (!m_is_enabled) return;
 
-	detectModifiers();
-
 	RenderScene* scene = static_cast<RenderScene*>(m_component.scene);
 	DVec3 origin;
 	Vec3 dir;
@@ -1115,17 +1058,42 @@ void TerrainEditor::onMouseMove(UniverseView& view, int x, int y, int, int)
 		if (!is_terrain) return;
 
 		const DVec3 hit_point = hit.origin + hit.dir * hit.t;
-		switch (m_action_type) {
-			case FLAT_HEIGHT:
-			case RAISE_HEIGHT:
-			case LOWER_HEIGHT:
-			case SMOOTH_HEIGHT:
-			case REMOVE_GRASS:
-			case ADD_GRASS:
-			case LAYER: paint(hit_point, m_action_type, true); break;
-			case ENTITY: paintEntities(hit_point); break;
-			case REMOVE_ENTITY: removeEntities(hit_point); break;
-			default: ASSERT(false); break;
+		switch(m_mode) {
+			case Mode::ENTITY:
+				if (m_remove_entity_action->isActive()) {
+					removeEntities(hit_point);
+				}
+				else {
+					paintEntities(hit_point);
+				}
+				break;
+			case Mode::HEIGHT:
+				if (m_is_flat_height) {
+					if (ImGui::GetIO().KeyCtrl) {
+						m_flat_height = getHeight(hit_point);
+					}
+					else {
+						paint(hit_point, TerrainEditor::FLAT_HEIGHT, false);
+					}
+				}
+				else {
+					TerrainEditor::ActionType action = TerrainEditor::RAISE_HEIGHT;
+					if (m_lower_terrain_action->isActive()) {
+						action = TerrainEditor::LOWER_HEIGHT;
+					}
+					else if (m_smooth_terrain_action->isActive()) {
+						action = TerrainEditor::SMOOTH_HEIGHT;
+					}
+					paint(hit_point, action, false); break;
+				}
+				break;
+			case Mode::LAYER:
+				TerrainEditor::ActionType action = TerrainEditor::LAYER;
+				if (m_remove_grass_action->isActive()) {
+					action = TerrainEditor::REMOVE_GRASS;
+				}
+				paint(hit_point, action, false);
+				break;
 		}
 	}
 }
@@ -1139,307 +1107,428 @@ Material* TerrainEditor::getMaterial() const
 }
 
 
+void TerrainEditor::layerGUI() {
+	m_mode = Mode::LAYER;
+	auto* scene = static_cast<RenderScene*>(m_component.scene);
+	if (getMaterial()
+		&& getMaterial()->getTextureByName(SPLATMAP_SLOT_NAME)
+		&& ImGui::ToolbarButton(m_app.getBigIconFont(), ICON_FA_SAVE, ImGui::GetStyle().Colors[ImGuiCol_Text], "Save"))
+	{
+		getMaterial()->getTextureByName(SPLATMAP_SLOT_NAME)->save();
+	}
+
+	if (m_brush_texture)
+	{
+		const gpu::TextureHandle th = m_brush_texture->handle;
+		ImGui::Image((void*)(uintptr_t)th.value, ImVec2(100, 100));
+		if (ImGui::ToolbarButton(m_app.getBigIconFont(), ICON_FA_TIMES, ImGui::GetStyle().Colors[ImGuiCol_Text], "Clear brush mask"))
+		{
+			m_brush_texture->destroy();
+			LUMIX_DELETE(m_world_editor.getAllocator(), m_brush_texture);
+			m_brush_mask.clear();
+			m_brush_texture = nullptr;
+		}
+		ImGui::SameLine();
+	}
+
+	ImGui::SameLine();
+	if (ImGui::ToolbarButton(m_app.getBigIconFont(), ICON_FA_MASK, ImGui::GetStyle().Colors[ImGuiCol_Text], "Select brush mask"))
+	{
+		char filename[MAX_PATH_LENGTH];
+		if (OS::getOpenFilename(Span(filename), "All\0*.*\0", nullptr))
+		{
+			int image_width;
+			int image_height;
+			int image_comp;
+			auto* data = stbi_load(filename, &image_width, &image_height, &image_comp, 4);
+			if (data)
+			{
+				m_brush_mask.resize(image_width * image_height);
+				for (int j = 0; j < image_width; ++j)
+				{
+					for (int i = 0; i < image_width; ++i)
+					{
+						m_brush_mask[i + j * image_width] =
+							data[image_comp * (i + j * image_width)] > 128;
+					}
+				}
+
+				auto& rm = m_world_editor.getEngine().getResourceManager();
+				if (m_brush_texture)
+				{
+					m_brush_texture->destroy();
+					LUMIX_DELETE(m_world_editor.getAllocator(), m_brush_texture);
+				}
+
+				Lumix::IPlugin* plugin = m_world_editor.getEngine().getPluginManager().getPlugin("renderer");
+				Renderer& renderer = *static_cast<Renderer*>(plugin);
+				m_brush_texture = LUMIX_NEW(m_world_editor.getAllocator(), Texture)(
+					Path("brush_texture"), *rm.get(Texture::TYPE), renderer, m_world_editor.getAllocator());
+				m_brush_texture->create(image_width, image_height, gpu::TextureFormat::RGBA8, data, image_width * image_height * 4);
+
+				stbi_image_free(data);
+			}
+		}
+	}
+
+	char grass_mode_shortcut[64];
+	if (m_remove_entity_action->shortcutText(Span(grass_mode_shortcut))) {
+		ImGuiEx::Label(StaticString<64>("Grass mode (", grass_mode_shortcut, ")"));
+		ImGui::TextUnformatted(m_remove_entity_action->isActive() ? "Remove" : "Add");
+	}
+	int type_count = scene->getGrassCount((EntityRef)m_component.entity);
+	for (int i = 0; i < type_count; ++i) {
+		ImGui::SameLine();
+		if (i == 0 || ImGui::GetContentRegionAvail().x < 50) ImGui::NewLine();
+		bool b = (m_grass_mask & (1 << i)) != 0;
+		m_app.getAssetBrowser().tile(scene->getGrassPath((EntityRef)m_component.entity, i), b);
+		if (ImGui::IsItemClicked()) {
+			if (!ImGui::GetIO().KeyCtrl) m_grass_mask = 0;
+			if (b) {
+				m_grass_mask &= ~(1 << i);
+			}
+			else {
+				m_grass_mask |= 1 << i;
+			}
+		}
+	}
+
+	Texture* albedo = getMaterial()->getTextureByName(DETAIL_ALBEDO_SLOT_NAME);
+	Texture* normal = getMaterial()->getTextureByName(DETAIL_NORMAL_SLOT_NAME);
+	
+	if (!albedo) {
+		ImGui::Text("No detail albedo in material %s", getMaterial()->getPath().c_str());
+		return;
+	}
+	if (albedo->isFailure()) {
+		ImGui::Text("%s failed to load", albedo->getPath().c_str());
+		return;
+	}
+	if (!albedo->isReady()) {
+		ImGui::Text("Loading %s...", albedo->getPath().c_str());
+		return;
+	}
+	
+	if (!normal) {
+		ImGui::Text("No detail normal in material %s", getMaterial()->getPath().c_str());
+		return;
+	}
+	if (normal->isFailure()) {
+		ImGui::Text("%s failed to load", normal->getPath().c_str());
+		return;
+	}
+	if (!normal->isReady()) {
+		ImGui::Text("Loading %s...", normal->getPath().c_str());
+		return;
+	}
+
+	if (albedo->layers != normal->layers) {
+		ImGui::TextWrapped(ICON_FA_EXCLAMATION_TRIANGLE " albedo texture %s has different number of layers than normal texture %s"
+			, albedo->getPath().c_str()
+			, normal->getPath().c_str());
+	}
+
+	bool primary = m_layers_mask & 0b1;
+	bool secondary = m_layers_mask & 0b10;
+
+
+	// TODO shader does not handle secondary surfaces now, so pretend they don't exist
+	// uncomment once shader is ready
+	m_layers_mask = 0xb11;
+	/*ImGuiEx::Label("Primary surface");
+	ImGui::Checkbox("##prim", &primary);
+	ImGuiEx::Label("Secondary surface");
+	ImGui::Checkbox("##sec", &secondary);
+	if (secondary) {
+		bool use = m_fixed_value.x >= 0;
+		ImGuiEx::Label("Use fixed value");
+		if (ImGui::Checkbox("##fxd", &use)) {
+			m_fixed_value.x = use ? 0.f : -1.f;
+		}
+		if (m_fixed_value.x >= 0) {
+		ImGuiEx::Label("Min/max");
+			ImGui::DragFloatRange2("##minmax", &m_fixed_value.x, &m_fixed_value.y, 0.01f, 0, 1);
+		}
+	}*/
+
+	FileSystem& fs = m_app.getWorldEditor().getEngine().getFileSystem();
+	if (albedo->getPath() != m_albedo_composite_path) {
+		m_albedo_composite.loadSync(fs, albedo->getPath());
+		m_albedo_composite_path = albedo->getPath();
+	}
+
+	m_layers_mask = (primary ? 1 : 0) | (secondary ? 0b10 : 0);
+	for (i32 i = 0; i < m_albedo_composite.layers.size(); ++i) {
+		ImGui::SameLine();
+		if (i == 0 || ImGui::GetContentRegionAvail().x < 50) ImGui::NewLine();
+		bool b = m_textures_mask & ((u64)1 << i);
+		m_app.getAssetBrowser().tile(m_albedo_composite.layers[i].red.path, b);
+		if (ImGui::IsItemClicked()) {
+			if (!ImGui::GetIO().KeyCtrl) m_textures_mask = 0;
+			if (b) m_textures_mask &= ~((u64)1 << i);
+			else m_textures_mask |= (u64)1 << i;
+		}
+		if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+			ImGui::OpenPopup(StaticString<8>("ctx", i));
+		}
+
+		if (ImGui::BeginPopup(StaticString<8>("ctx", i))) {
+			if (ImGui::Selectable("Remove surface")) {
+				compositeTextureRemoveLayer(albedo->getPath(), i);
+				compositeTextureRemoveLayer(normal->getPath(), i);
+				m_albedo_composite_path = "";
+			}
+			ImGui::EndPopup();
+		}
+	}
+	if (albedo->layers < 255) {
+		if (ImGui::Button(ICON_FA_PLUS "Add surface")) ImGui::OpenPopup("Add surface");
+	}
+	ImGui::SetNextWindowSizeConstraints(ImVec2(200, 100), ImVec2(FLT_MAX, FLT_MAX));
+	if (ImGui::BeginPopupModal("Add surface")) {
+		ImGuiEx::Label("Albedo");
+		m_app.getAssetBrowser().resourceInput("albedo", Span(m_add_layer_popup.albedo), Texture::TYPE);
+		ImGuiEx::Label("Normal");
+		m_app.getAssetBrowser().resourceInput("normal", Span(m_add_layer_popup.normal), Texture::TYPE);
+		if (ImGui::Button(ICON_FA_PLUS "Add")) {
+			saveCompositeTexture(albedo->getPath(), m_add_layer_popup.albedo);
+			saveCompositeTexture(normal->getPath(), m_add_layer_popup.normal);
+			m_albedo_composite_path = "";
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(ICON_FA_TIMES "Cancel")) {
+			ImGui::CloseCurrentPopup();
+		}
+		ImGui::EndPopup();
+	}
+}
+
+void TerrainEditor::compositeTextureRemoveLayer(const Path& path, i32 layer) {
+	CompositeTexture texture(m_app.getAllocator());
+	FileSystem& fs = m_app.getWorldEditor().getEngine().getFileSystem();
+	if (!texture.loadSync(fs, path)) {
+		logError("Renderer") << "Failed to load " << path;
+	}
+	else {
+		texture.layers.erase(layer);
+		if (!texture.save(fs, path)) {
+			logError("Renderer") << "Failed to save " << path;
+		}
+	}
+}
+
+void TerrainEditor::saveCompositeTexture(const Path& path, const char* channel)
+{
+	CompositeTexture texture(m_app.getAllocator());
+	FileSystem& fs = m_app.getWorldEditor().getEngine().getFileSystem();
+	if (!texture.loadSync(fs, path)) {
+		logError("Renderer") << "Failed to load " << path;
+	}
+	else {
+		CompositeTexture::Layer new_layer;
+		new_layer.red.path = channel;
+		new_layer.red.src_channel = 0;
+		new_layer.green.path = channel;
+		new_layer.green.src_channel = 1;
+		new_layer.blue.path = channel;
+		new_layer.blue.src_channel = 2;
+		new_layer.alpha.path = channel;
+		new_layer.alpha.src_channel = 3;
+		texture.layers.push(new_layer);
+		if (!texture.save(fs, path)) {
+			logError("Renderer") << "Failed to save " << path;
+		}
+	}
+}
+
+void TerrainEditor::entityGUI() {
+	m_mode = Mode::ENTITY;
+			
+	static char filter[100] = {0};
+	ImGui::SetNextItemWidth(-20);
+	ImGui::InputTextWithHint("##filter", "Filter", filter, sizeof(filter));
+	ImGui::SameLine();
+	if (ImGuiEx::IconButton(ICON_FA_TIMES, "Clear filter")) {
+		filter[0] = '\0';
+	}
+
+	static ImVec2 size(-1, 200);
+	if (ImGui::ListBoxHeader("##prefabs", size)) {
+		auto& resources = m_app.getAssetCompiler().lockResources();
+		u32 count = 0;
+		for (const AssetCompiler::ResourceItem& res : resources) {
+			if (res.type != PrefabResource::TYPE) continue;
+			++count;
+			if (filter[0] != 0 && stristr(res.path.c_str(), filter) == nullptr) continue;
+			int selected_idx = m_selected_prefabs.find([&](PrefabResource* r) -> bool {
+				return r && r->getPath() == res.path;
+			});
+			bool selected = selected_idx >= 0;
+			if (ImGui::Checkbox(res.path.c_str(), &selected)) {
+				if (selected) {
+					ResourceManagerHub& manager = m_world_editor.getEngine().getResourceManager();
+					PrefabResource* prefab = manager.load<PrefabResource>(res.path);
+					m_selected_prefabs.push(prefab);
+				}
+				else {
+					PrefabResource* prefab = m_selected_prefabs[selected_idx];
+					m_selected_prefabs.swapAndPop(selected_idx);
+					prefab->getResourceManager().unload(*prefab);
+				}
+			}
+		}
+		if (count == 0) ImGui::TextUnformatted("No prefabs");
+		m_app.getAssetCompiler().unlockResources();
+		ImGui::ListBoxFooter();
+	}
+	ImGui::HSplitter("after_prefab", &size);
+
+	if(ImGui::Checkbox("Align with normal", &m_is_align_with_normal))
+	{
+		if(m_is_align_with_normal) m_is_rotate_x = m_is_rotate_y = m_is_rotate_z = false;
+	}
+	if (ImGui::Checkbox("Rotate around X", &m_is_rotate_x))
+	{
+		if (m_is_rotate_x) m_is_align_with_normal = false;
+	}
+	if (m_is_rotate_x)
+	{
+		Vec2 tmp = m_rotate_x_spread;
+		tmp.x = radiansToDegrees(tmp.x);
+		tmp.y = radiansToDegrees(tmp.y);
+		if (ImGui::DragFloat2("Rotate X spread", &tmp.x))
+		{
+			m_rotate_x_spread.x = degreesToRadians(tmp.x);
+			m_rotate_x_spread.y = degreesToRadians(tmp.y);
+		}
+	}
+	if (ImGui::Checkbox("Rotate around Y", &m_is_rotate_y))
+	{
+		if (m_is_rotate_y) m_is_align_with_normal = false;
+	}
+	if (m_is_rotate_y)
+	{
+		Vec2 tmp = m_rotate_y_spread;
+		tmp.x = radiansToDegrees(tmp.x);
+		tmp.y = radiansToDegrees(tmp.y);
+		if (ImGui::DragFloat2("Rotate Y spread", &tmp.x))
+		{
+			m_rotate_y_spread.x = degreesToRadians(tmp.x);
+			m_rotate_y_spread.y = degreesToRadians(tmp.y);
+		}
+	}
+	if(ImGui::Checkbox("Rotate around Z", &m_is_rotate_z))
+	{
+		if(m_is_rotate_z) m_is_align_with_normal = false;
+	}
+	if (m_is_rotate_z)
+	{
+		Vec2 tmp = m_rotate_z_spread;
+		tmp.x = radiansToDegrees(tmp.x);
+		tmp.y = radiansToDegrees(tmp.y);
+		if (ImGui::DragFloat2("Rotate Z spread", &tmp.x))
+		{
+			m_rotate_z_spread.x = degreesToRadians(tmp.x);
+			m_rotate_z_spread.y = degreesToRadians(tmp.y);
+		}
+	}
+	ImGui::DragFloat2("Size spread", &m_size_spread.x, 0.01f);
+	m_size_spread.x = minimum(m_size_spread.x, m_size_spread.y);
+	ImGui::DragFloat2("Y spread", &m_y_spread.x, 0.01f);
+	m_y_spread.x = minimum(m_y_spread.x, m_y_spread.y);		
+}
+
+
 void TerrainEditor::onGUI()
 {
-	if (m_decrease_brush_size->isRequested()) m_decrease_brush_size->func.invoke();
-	if (m_increase_brush_size->isRequested()) m_increase_brush_size->func.invoke();
-
 	auto* scene = static_cast<RenderScene*>(m_component.scene);
 	ImGui::Unindent();
-	if (!ImGui::TreeNodeEx("Terrain editor"))
-	{
+	if (!ImGui::CollapsingHeader("Terrain editor")) {
 		ImGui::Indent();
 		return;
 	}
+	ImGui::Indent();
 
-	ImGui::Checkbox("Editor enabled", &m_is_enabled);
-	if (!m_is_enabled)
-	{
-		ImGui::TreePop();
-		ImGui::Indent();
+	ImGuiEx::Label("Enable");
+	ImGui::Checkbox("##ed_enabled", &m_is_enabled);
+	if (!m_is_enabled) return;
+
+	if (!getMaterial()) {
+		ImGui::Text("No material");
 		return;
 	}
 
-	if (!getMaterial())
-	{
+	if (!getMaterial()->getTextureByName(HEIGHTMAP_SLOT_NAME)) {
 		ImGui::Text("No heightmap");
-		ImGui::TreePop();
-		ImGui::Indent();
 		return;
 	}
 
 	bool is_grass_enabled = scene->isGrassEnabled();
-	if (ImGui::Checkbox("Enable grass", &is_grass_enabled)) scene->enableGrass(is_grass_enabled);
+	ImGuiEx::Label("Enable grass");
+	if (ImGui::Checkbox("##enable_grass", &is_grass_enabled)) scene->enableGrass(is_grass_enabled);
 
-	ImGui::SliderFloat("Brush size", &m_terrain_brush_size, MIN_BRUSH_SIZE, 100);
-	ImGui::SliderFloat("Brush strength", &m_terrain_brush_strength, 0, 1.0f);
+	ImGuiEx::Label("Brush size");
+	ImGui::DragFloat("##br_size", &m_terrain_brush_size, 1, MIN_BRUSH_SIZE, FLT_MAX);
+	ImGuiEx::Label("Brush strength");
+	ImGui::SliderFloat("##br_str", &m_terrain_brush_strength, 0, 1.0f);
 
-	enum BrushType
-	{
-		HEIGHT,
-		LAYER,
-		ENTITY,
-		GRASS
-	};
-
-	if (ImGui::Combo("Brush type", &m_current_brush, "Height\0Layer\0Entity\0Grass\0"))
-	{
-		m_action_type = m_current_brush == HEIGHT ? TerrainEditor::RAISE_HEIGHT : m_action_type;
-	}
-
-	switch (m_current_brush)
-	{
-		case HEIGHT:
-			if (getMaterial() 
-				&& getMaterial()->getTextureByName(HEIGHTMAP_SLOT_NAME)
-				&&ImGui::Button("Save heightmap")) 
+	if (ImGui::BeginTabBar("brush_type")) {
+		if (ImGui::BeginTabItem("Height")) {
+			m_mode = Mode::HEIGHT;
+			if (ImGui::ToolbarButton(m_app.getBigIconFont(), ICON_FA_SAVE, ImGui::GetStyle().Colors[ImGuiCol_Text], "Save")) 
 			{
 				getMaterial()->getTextureByName(HEIGHTMAP_SLOT_NAME)->save();
 			}
-			break;
-		case GRASS:
-		case LAYER:
-			if (getMaterial()
-				&& getMaterial()->getTextureByName(SPLATMAP_SLOT_NAME)
-				&& ImGui::Button("Save layermap and grassmap"))
-			{
-				getMaterial()->getTextureByName(SPLATMAP_SLOT_NAME)->save();
+			
+			
+			ImGuiEx::Label("Mode");
+			if (m_is_flat_height) {
+				ImGui::TextUnformatted("flat");
 			}
-			break;
-		case ENTITY: break;
-	}
-
-	if (m_current_brush == LAYER || m_current_brush == GRASS)
-	{
-		if (m_brush_texture)
-		{
-			const gpu::TextureHandle th = m_brush_texture->handle;
-			ImGui::Image((void*)(uintptr_t)th.value, ImVec2(100, 100));
-			if (ImGui::Button("Clear mask"))
-			{
-				m_brush_texture->destroy();
-				LUMIX_DELETE(m_world_editor.getAllocator(), m_brush_texture);
-				m_brush_mask.clear();
-				m_brush_texture = nullptr;
-			}
-			ImGui::SameLine();
-		}
-
-		ImGui::SameLine();
-		if (ImGui::Button("Select mask"))
-		{
-			char filename[MAX_PATH_LENGTH];
-			if (OS::getOpenFilename(Span(filename), "All\0*.*\0", nullptr))
-			{
-				int image_width;
-				int image_height;
-				int image_comp;
-				auto* data = stbi_load(filename, &image_width, &image_height, &image_comp, 4);
-				if (data)
-				{
-					m_brush_mask.resize(image_width * image_height);
-					for (int j = 0; j < image_width; ++j)
-					{
-						for (int i = 0; i < image_width; ++i)
-						{
-							m_brush_mask[i + j * image_width] =
-								data[image_comp * (i + j * image_width)] > 128;
-						}
-					}
-
-					auto& rm = m_world_editor.getEngine().getResourceManager();
-					if (m_brush_texture)
-					{
-						m_brush_texture->destroy();
-						LUMIX_DELETE(m_world_editor.getAllocator(), m_brush_texture);
-					}
-
-					Lumix::IPlugin* plugin = m_world_editor.getEngine().getPluginManager().getPlugin("renderer");
-					Renderer& renderer = *static_cast<Renderer*>(plugin);
-					m_brush_texture = LUMIX_NEW(m_world_editor.getAllocator(), Texture)(
-						Path("brush_texture"), *rm.get(Texture::TYPE), renderer, m_world_editor.getAllocator());
-					m_brush_texture->create(image_width, image_height, gpu::TextureFormat::RGBA8, data, image_width * image_height * 4);
-
-					stbi_image_free(data);
+			else if (m_smooth_terrain_action->isActive()) {
+				char shortcut[64];
+				if (m_smooth_terrain_action->shortcutText(Span(shortcut))) {
+					ImGui::Text("smooth (%s)", shortcut);
+				}
+				else {
+					ImGui::TextUnformatted("smooth");
 				}
 			}
-		}
-	}
-
-
-	switch (m_current_brush)
-	{
-		case HEIGHT:
-		{
-			bool is_flat_tool = m_action_type == TerrainEditor::FLAT_HEIGHT;
-			if (ImGui::Checkbox("Flat", &is_flat_tool))
-			{
-				m_action_type = is_flat_tool ? TerrainEditor::FLAT_HEIGHT : TerrainEditor::RAISE_HEIGHT;
+			else if (m_lower_terrain_action->isActive()) {
+				char shortcut[64];
+				if (m_lower_terrain_action->shortcutText(Span(shortcut))) {
+					ImGui::Text("lower (%s)", shortcut);
+				}
+				else {
+					ImGui::TextUnformatted("lower");
+				}
 			}
+			else {
+				ImGui::TextUnformatted("raise");
+			}
+			
+			ImGui::Checkbox("Flat", &m_is_flat_height);
 
-			if (m_action_type == TerrainEditor::FLAT_HEIGHT)
-			{
+			if (m_is_flat_height) {
 				ImGui::SameLine();
 				ImGui::Text("- Press Ctrl to pick height");
 			}
-			break;
+			ImGui::EndTabItem();
 		}
-		case GRASS:
-		{
-			m_action_type = TerrainEditor::ADD_GRASS;
-			int type_count = scene->getGrassCount((EntityRef)m_component.entity);
-			for (int i = 0; i < type_count; ++i)
-			{
-				if (i % 4 != 0) ImGui::SameLine();
-				bool b = (m_grass_mask & (1 << i)) != 0;
-				if (ImGui::Checkbox(StaticString<20>("", i, "###rb", i), &b))
-				{
-					if (b)
-					{
-						m_grass_mask |= 1 << i;
-					}
-					else
-					{
-						m_grass_mask &= ~(1 << i);
-					}
-				}
-			}
-			break;
-		}
-		case LAYER:
-		{
-			m_action_type = TerrainEditor::LAYER;
-			Texture* tex = getMaterial()->getTextureByName(DETAIL_ALBEDO_SLOT_NAME);
-			if (tex) {
-				bool primary = m_layers_mask & 0b1;
-				bool secondary = m_layers_mask & 0b10;
-				ImGui::Checkbox("Primary layer", &primary);
-				ImGui::Checkbox("Secondary layer", &secondary);
-				if (secondary) {
-					bool use = m_fixed_value.x >= 0;
-					if (ImGui::Checkbox("Use fixed value", &use)) {
-						m_fixed_value.x = use ? 0.f : -1.f;
-					}
-					if (m_fixed_value.x >= 0) {
-						ImGui::DragFloatRange2("Min/max", &m_fixed_value.x, &m_fixed_value.y, 0.01f, 0, 1);
-					}
-				}
-				m_layers_mask = (primary ? 1 : 0) | (secondary ? 0b10 : 0);
-				if (tex->layers == 1) {
-					ImGui::Text("Only one layer available. Add layers to albedo detail texture (in material).");
-				}
-				for (u32 i = 0; i < tex->layers; ++i) {
-					if (i % 4 != 0) ImGui::SameLine();
-					bool b = m_textures_mask & ((u64)1 << i);
-					if (ImGui::Checkbox(StaticString<20>("", i, "###rb", i), &b)) {
-						if (b) m_textures_mask |= (u64)1 << i;
-						else m_textures_mask &= ~((u64)1 << i);
-					}
-				}
 
-			}
-			break;
+		if (ImGui::BeginTabItem("Surface and grass")) {
+			layerGUI();
+			ImGui::EndTabItem();
 		}
-		case ENTITY:
-		{
-			m_action_type = TerrainEditor::ENTITY;
-			
-			static char filter[100] = {0};
-			static ImVec2 size(-1, 100);
-			ImGui::InputTextWithHint("##filter", "Filter", filter, sizeof(filter));
-			if (ImGui::ListBoxHeader("Prefabs", size)) {
-				auto& resources = m_app.getAssetCompiler().lockResources();
-				u32 count = 0;
-				for (const AssetCompiler::ResourceItem& res : resources) {
-					if (res.type != PrefabResource::TYPE) continue;
-					++count;
-					if (filter[0] != 0 && stristr(res.path.c_str(), filter) == nullptr) continue;
-					int selected_idx = m_selected_prefabs.find([&](PrefabResource* r) -> bool {
-						return r && r->getPath() == res.path;
-					});
-					bool selected = selected_idx >= 0;
-					if (ImGui::Checkbox(res.path.c_str(), &selected)) {
-						if (selected) {
-							ResourceManagerHub& manager = m_world_editor.getEngine().getResourceManager();
-							PrefabResource* prefab = manager.load<PrefabResource>(res.path);
-							m_selected_prefabs.push(prefab);
-						}
-						else {
-							PrefabResource* prefab = m_selected_prefabs[selected_idx];
-							m_selected_prefabs.swapAndPop(selected_idx);
-							prefab->getResourceManager().unload(*prefab);
-						}
-					}
-				}
-				if (count == 0) ImGui::TextUnformatted("No prefabs");
-				m_app.getAssetCompiler().unlockResources();
-				ImGui::ListBoxFooter();
-			}
-			ImGui::HSplitter("after_prefab", &size);
 
-			if(ImGui::Checkbox("Align with normal", &m_is_align_with_normal))
-			{
-				if(m_is_align_with_normal) m_is_rotate_x = m_is_rotate_y = m_is_rotate_z = false;
-			}
-			if (ImGui::Checkbox("Rotate around X", &m_is_rotate_x))
-			{
-				if (m_is_rotate_x) m_is_align_with_normal = false;
-			}
-			if (m_is_rotate_x)
-			{
-				Vec2 tmp = m_rotate_x_spread;
-				tmp.x = radiansToDegrees(tmp.x);
-				tmp.y = radiansToDegrees(tmp.y);
-				if (ImGui::DragFloat2("Rotate X spread", &tmp.x))
-				{
-					m_rotate_x_spread.x = degreesToRadians(tmp.x);
-					m_rotate_x_spread.y = degreesToRadians(tmp.y);
-				}
-			}
-			if (ImGui::Checkbox("Rotate around Y", &m_is_rotate_y))
-			{
-				if (m_is_rotate_y) m_is_align_with_normal = false;
-			}
-			if (m_is_rotate_y)
-			{
-				Vec2 tmp = m_rotate_y_spread;
-				tmp.x = radiansToDegrees(tmp.x);
-				tmp.y = radiansToDegrees(tmp.y);
-				if (ImGui::DragFloat2("Rotate Y spread", &tmp.x))
-				{
-					m_rotate_y_spread.x = degreesToRadians(tmp.x);
-					m_rotate_y_spread.y = degreesToRadians(tmp.y);
-				}
-			}
-			if(ImGui::Checkbox("Rotate around Z", &m_is_rotate_z))
-			{
-				if(m_is_rotate_z) m_is_align_with_normal = false;
-			}
-			if (m_is_rotate_z)
-			{
-				Vec2 tmp = m_rotate_z_spread;
-				tmp.x = radiansToDegrees(tmp.x);
-				tmp.y = radiansToDegrees(tmp.y);
-				if (ImGui::DragFloat2("Rotate Z spread", &tmp.x))
-				{
-					m_rotate_z_spread.x = degreesToRadians(tmp.x);
-					m_rotate_z_spread.y = degreesToRadians(tmp.y);
-				}
-			}
-			ImGui::DragFloat2("Size spread", &m_size_spread.x, 0.01f);
-			m_size_spread.x = minimum(m_size_spread.x, m_size_spread.y);
-			ImGui::DragFloat2("Y spread", &m_y_spread.x, 0.01f);
-			m_y_spread.x = minimum(m_y_spread.x, m_y_spread.y);
+		if (ImGui::BeginTabItem("Entity")) {
+			entityGUI();
+			ImGui::EndTabItem();
 		}
-		break;
-		default: ASSERT(false); break;
+		ImGui::EndTabBar();
 	}
 
-	if (!m_component.isValid() || m_action_type == NOT_SET || !m_is_enabled)
-	{
-		ImGui::TreePop();
-		ImGui::Indent();
-
+	if (!m_component.isValid() || !m_is_enabled) {
 		return;
 	}
 
@@ -1457,13 +1546,9 @@ void TerrainEditor::onGUI()
 		if(hit.is_hit) {
 			DVec3 center = hit.origin + hit.dir * hit.t;
 			drawCursor(*scene, entity, center);
-			ImGui::TreePop();
-			ImGui::Indent();
 			return;
 		}
 	}
-	ImGui::TreePop();
-	ImGui::Indent();
 }
 
 
@@ -1471,7 +1556,8 @@ void TerrainEditor::paint(const DVec3& hit_pos, ActionType action_type, bool old
 {
 	PaintTerrainCommand* command = LUMIX_NEW(m_world_editor.getAllocator(), PaintTerrainCommand)(m_world_editor,
 		action_type,
-		action_type == ADD_GRASS || action_type == REMOVE_GRASS ? (u64)m_grass_mask : m_textures_mask,
+		m_grass_mask,
+		(u64)m_textures_mask,
 		hit_pos,
 		m_brush_mask,
 		m_terrain_brush_size,

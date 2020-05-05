@@ -59,7 +59,9 @@ struct EntityRef;
 
 struct EntityPtr
 {
-	int index;
+	EntityPtr() : index(-1) {}
+	EntityPtr(i32 index) : index(index) {}
+	i32 index;
 	bool operator==(const EntityPtr& rhs) const { return rhs.index == index; }
 	bool operator<(const EntityPtr& rhs) const { return rhs.index < index; }
 	bool operator>(const EntityPtr& rhs) const { return rhs.index > index; }
@@ -224,7 +226,6 @@ inline EntityPtr::operator EntityRef() const
 	#pragma warning(disable : 4251)
 	// this is disabled because VS19 16.5.0 has false positives :(
 	#pragma warning(disable : 4724)
-	#pragma warning(disable : 4996)
 	#if _MSC_VER == 1900 
 		#pragma warning(disable : 4091)
 	#endif

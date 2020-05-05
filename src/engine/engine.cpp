@@ -27,13 +27,14 @@ namespace Lumix
 void registerEngineAPI(lua_State* L, Engine* engine);
 
 static const u32 SERIALIZED_ENGINE_MAGIC = 0x5f4c454e; // == '_LEN'
+static const u32 SERIALIZED_PROJECT_MAGIC = 0x5f50524c; // == '_PRL'
 
 
 #pragma pack(1)
 struct SerializedEngineHeader
 {
-	u32 m_magic;
-	u32 m_reserved; // for crc
+	u32 magic;
+	u32 version;
 };
 #pragma pack()
 
@@ -73,7 +74,6 @@ public:
 		, m_last_lua_resource_idx(-1)
 		, m_is_game_running(false)
 		, m_last_time_delta(0)
-		, m_path_manager(PathManager::create(m_allocator))
 		, m_time_multiplier(1.0f)
 		, m_paused(false)
 		, m_next_frame(false)
@@ -151,7 +151,6 @@ public:
 		getLogCallback().unbind<&EngineImpl::logToFile>(this);
 		m_log_file.close();
 		m_is_log_file_open = false;
-		PathManager::destroy(*m_path_manager);
 		OS::destroyWindow(m_window_handle);
 	}
 
@@ -189,7 +188,7 @@ public:
 		Ref<EntityMap> entity_map) override
 	{
 		ASSERT(prefab.isReady());
-		InputMemoryStream blob(prefab.data.begin(), prefab.data.byte_size());
+		InputMemoryStream blob(prefab.data);
 		if (!deserialize(universe, blob, entity_map)) {
 			logError("Engine") << "Failed to instantiate prefab " << prefab.getPath();
 			return false;
@@ -389,17 +388,54 @@ public:
 		return true;
 	}
 
+	bool deserializeProject(InputMemoryStream& serializer) override {
+		SerializedEngineHeader header;
+		serializer.read(header);
+		if (header.magic != SERIALIZED_PROJECT_MAGIC) return false;
+		if (header.version != 0) return false;
+		i32 count = 0;
+		serializer.read(count);
+		const Array<IPlugin*>& plugins = m_plugin_manager->getPlugins();
+		for (i32 i = 0; i < count; ++i) {
+			u32 hash;
+			serializer.read(hash);
+			i32 idx = plugins.find([&](IPlugin* plugin){
+				return crc32(plugin->getName()) == hash;
+			});
+			if (idx < 0) return false;
+			IPlugin* plugin = plugins[idx];
+			if (!plugin) return false;
+			u32 version;
+			serializer.read(version);
+			if (!plugin->deserialize(version, serializer)) return false;
+		}
+		return false;
+	}
+
+	void serializeProject(OutputMemoryStream& serializer) const override {
+		SerializedEngineHeader header;
+		header.magic = SERIALIZED_PROJECT_MAGIC;
+		header.version = 0;
+		serializer.write(header);
+		const Array<IPlugin*>& plugins = m_plugin_manager->getPlugins();
+		serializer.write((i32)plugins.size());
+		for (IPlugin* plugin : plugins) {
+			const u32 hash = crc32(plugin->getName());
+			serializer.write(hash);
+			serializer.write((u32)plugin->getVersion());
+			plugin->serialize(serializer);
+		}
+	}
 
 	u32 serialize(Universe& ctx, OutputMemoryStream& serializer) override
 	{
 		SerializedEngineHeader header;
-		header.m_magic = SERIALIZED_ENGINE_MAGIC; // == '_LEN'
-		header.m_reserved = 0;
+		header.magic = SERIALIZED_ENGINE_MAGIC; // == '_LEN'
+		header.version = 0;
 		serializer.write(header);
 		serializePluginList(serializer);
 		serializeSceneVersions(serializer, ctx);
-		m_path_manager->serialize(serializer);
-		int pos = (int)serializer.getPos();
+		i32 pos = (i32)serializer.size();
 		ctx.serialize(serializer);
 		serializer.write((i32)ctx.getScenes().size());
 		for (IScene* scene : ctx.getScenes())
@@ -407,7 +443,7 @@ public:
 			serializer.writeString(scene->getPlugin().getName());
 			scene->serialize(serializer);
 		}
-		u32 crc = crc32((const u8*)serializer.getData() + pos, (int)serializer.getPos() - pos);
+		u32 crc = crc32((const u8*)serializer.data() + pos, (i32)serializer.size() - pos);
 		return crc;
 	}
 
@@ -416,7 +452,7 @@ public:
 	{
 		SerializedEngineHeader header;
 		serializer.read(header);
-		if (header.m_magic != SERIALIZED_ENGINE_MAGIC)
+		if (header.magic != SERIALIZED_ENGINE_MAGIC)
 		{
 			logError("Core") << "Wrong or corrupted file";
 			return false;
@@ -424,7 +460,6 @@ public:
 		if (!hasSerializedPlugins(serializer)) return false;
 		if (!hasSupportedSceneVersions(serializer, ctx)) return false;
 
-		m_path_manager->deserialize(serializer);
 		ctx.deserialize(serializer, entity_map);
 		i32 scene_count;
 		serializer.read(scene_count);
@@ -434,7 +469,6 @@ public:
 			IScene* scene = ctx.getScene(crc32(tmp));
 			scene->deserialize(serializer, entity_map);
 		}
-		m_path_manager->clear();
 		return true;
 	}
 
@@ -471,7 +505,6 @@ public:
 	FileSystem& getFileSystem() override { return *m_file_system; }
 	InputSystem& getInputSystem() override { return *m_input_system; }
 	ResourceManagerHub& getResourceManager() override { return m_resource_manager; }
-	PathManager& getPathManager() override{ return *m_path_manager; }
 	lua_State* getState() override { return m_state; }
 	float getLastTimeDelta() const override { return m_last_time_delta / m_time_multiplier; }
 
@@ -493,7 +526,6 @@ private:
 	bool m_paused;
 	bool m_next_frame;
 	OS::WindowHandle m_window_handle;
-	PathManager* m_path_manager;
 	lua_State* m_state;
 	OS::OutputFile m_log_file;
 	bool m_is_log_file_open = false;

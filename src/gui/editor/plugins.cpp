@@ -76,20 +76,22 @@ struct SpritePlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		Sprite* sprite = (Sprite*)resources[0];
 		if (!sprite->isReady()) return;
 		
-		if (ImGui::Button("Save")) saveSprite(*sprite);
+		if (ImGui::Button(ICON_FA_SAVE "Save")) saveSprite(*sprite);
 		ImGui::SameLine();
-		if (ImGui::Button("Open in external editor")) m_app.getAssetBrowser().openInExternalEditor(sprite);
+		if (ImGui::Button(ICON_FA_EXTERNAL_LINK_ALT "Open externally")) m_app.getAssetBrowser().openInExternalEditor(sprite);
 
 		char tmp[MAX_PATH_LENGTH];
 		Texture* tex = sprite->getTexture();
 		copyString(tmp, tex ? tex->getPath().c_str() : "");
-		if (m_app.getAssetBrowser().resourceInput("Texture", "texture", Span(tmp), Texture::TYPE))
+		ImGuiEx::Label("Texture");
+		if (m_app.getAssetBrowser().resourceInput("texture", Span(tmp), Texture::TYPE))
 		{
 			sprite->setTexture(Path(tmp));
 		}
 
 		static const char* TYPES_STR[] = { "9 patch", "Simple" };
-		if (ImGui::BeginCombo("Type", TYPES_STR[sprite->type]))
+		ImGuiEx::Label("type");
+		if (ImGui::BeginCombo("##type", TYPES_STR[sprite->type]))
 		{
 			if (ImGui::Selectable("9 patch")) sprite->type = Sprite::Type::PATCH9;
 			if (ImGui::Selectable("Simple")) sprite->type = Sprite::Type::SIMPLE;
@@ -98,10 +100,14 @@ struct SpritePlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		switch (sprite->type)
 		{
 			case Sprite::Type::PATCH9:
-				ImGui::InputInt("Top", &sprite->top);
-				ImGui::InputInt("Right", &sprite->right);
-				ImGui::InputInt("Bottom", &sprite->bottom);
-				ImGui::InputInt("Left", &sprite->left);
+				ImGuiEx::Label("Top");
+				ImGui::InputInt("##top", &sprite->top);
+				ImGuiEx::Label("Right");
+				ImGui::InputInt("##right", &sprite->right);
+				ImGuiEx::Label("Bottom");
+				ImGui::InputInt("##bottom", &sprite->bottom);
+				ImGuiEx::Label("Left");
+				ImGui::InputInt("##left", &sprite->left);
 				patch9edit(sprite);
 				break;
 			case Sprite::Type::SIMPLE: break;
@@ -273,11 +279,33 @@ private:
 		EntityRef e = selected_entities[0];
 		if (!scene.hasGUI(e)) return MouseMode::NONE;
 
-		const GUIScene::Rect rect = scene.getRectOnCanvas(e, canvas_size);
+		const EntityPtr parent = scene.getUniverse().getParent(e);
+		const GUIScene::Rect rect = scene.getRectEx(e, canvas_size);
+		GUIScene::Rect parent_rect = scene.getRectEx(parent, canvas_size);
+
+		const float br = scene.getRectBottomRelative(e);
+		const float tr = scene.getRectTopRelative(e);
+		const float lr = scene.getRectLeftRelative(e);
+		const float rr = scene.getRectRightRelative(e);
+
 		const Vec2 bottom_right = { rect.x + rect.w, rect.y + rect.h };
 		draw.addRect({ rect.x, rect.y }, bottom_right, Color::BLACK, 1);
 		draw.addRect({ rect.x - 1, rect.y - 1 }, bottom_right + Vec2(1, 1), Color::WHITE, 1);
 		const Vec2 mid = { rect.x + rect.w * 0.5f, rect.y + rect.h * 0.5f };
+
+		auto drawAnchor = [&draw](const Vec2& pos, bool top, bool left){
+			const float SIZE = 10;
+			const Vec2 h = left ? Vec2(-SIZE, 0) : Vec2(SIZE, 0);
+			const Vec2 v = top ? Vec2(0, -SIZE) : Vec2(0, SIZE);
+			draw.addLine(pos, pos + v, Color::RED, 1);
+			draw.addLine(pos + h, pos + v, Color::RED, 1);
+			draw.addLine(pos + h, pos, Color::RED, 1);
+		};
+
+		drawAnchor(Vec2(parent_rect.x + parent_rect.w * lr, parent_rect.y + parent_rect.h * tr), true, true);
+		drawAnchor(Vec2(parent_rect.x + parent_rect.w * lr, parent_rect.y + parent_rect.h * br), false, true);
+		drawAnchor(Vec2(parent_rect.x + parent_rect.w * rr, parent_rect.y + parent_rect.h * br), false, false);
+		drawAnchor(Vec2(parent_rect.x + parent_rect.w * rr, parent_rect.y + parent_rect.h * tr), true, false);
 
 		auto drawHandle = [&](const Vec2& pos, const ImVec2& mouse_pos) {
 			const float SIZE = 5;
@@ -371,7 +399,7 @@ private:
 		for (int i = 0; i < m_copy_position_buffer_count; ++i)
 		{
 			CopyPositionBufferItem& item = m_copy_position_buffer[i];
-			m_editor->setProperty(GUI_RECT_TYPE, -1, item.prop, Span(&e, 1), item.value);
+			m_editor->setProperty(GUI_RECT_TYPE, "", -1, item.prop, Span(&e, 1), item.value);
 		}
 		m_editor->endCommandGroup();
 	}
@@ -395,7 +423,7 @@ private:
 			m_pipeline->setUniverse(m_editor->getUniverse());
 
 			GUIScene* scene = (GUIScene*)m_editor->getUniverse()->getScene(crc32("gui"));
-			scene->render(*m_pipeline, { size.x, size.y });
+			scene->render(*m_pipeline, { size.x, size.y }, false);
 			
 			MouseMode new_mode = drawGizmo(m_pipeline->getDraw2D(), *scene, { size.x, size.y }, mouse_canvas_pos);
 			if (m_mouse_mode == MouseMode::NONE) m_mouse_mode = new_mode; //-V1051
@@ -408,23 +436,27 @@ private:
 				{
 					case MouseMode::RESIZE:
 					{
+						m_editor->beginCommandGroup(crc32("gui_mouse_resize"));
 						float b = m_bottom_right_start_transform.y + ImGui::GetMouseDragDelta(0).y;
-						scene->setRectBottomPoints(e, b);
+						setRectProperty(e, "Bottom Points", b);
 						float r = m_bottom_right_start_transform.x + ImGui::GetMouseDragDelta(0).x;
-						scene->setRectRightPoints(e, r);
+						setRectProperty(e, "Right Points", r);
+						m_editor->endCommandGroup();
 					}
 					break;
 					case MouseMode::MOVE:
 					{
+						m_editor->beginCommandGroup(crc32("gui_mouse_move"));
 						float b = m_bottom_right_start_transform.y + ImGui::GetMouseDragDelta(0).y;
-						scene->setRectBottomPoints(e, b);
+						setRectProperty(e, "Bottom Points", b);
 						float r = m_bottom_right_start_transform.x + ImGui::GetMouseDragDelta(0).x;
-						scene->setRectRightPoints(e, r);
+						setRectProperty(e, "Right Points", r);
 
 						float t = m_top_left_start_move.y + ImGui::GetMouseDragDelta(0).y;
-						scene->setRectTopPoints(e, t);
+						setRectProperty(e, "Top Points", t);
 						float l = m_top_left_start_move.x + ImGui::GetMouseDragDelta(0).x;
-						scene->setRectLeftPoints(e, l);
+						setRectProperty(e, "Left Points", l);
+						m_editor->endCommandGroup();
 					}
 					break;
 				}
@@ -451,10 +483,14 @@ private:
 
 			if (ImGui::IsMouseClicked(0) && ImGui::IsItemHovered() && m_mouse_mode == MouseMode::NONE)
 			{
-				EntityPtr e = scene->getRectAt(toLumix(mouse_canvas_pos), toLumix(size));
+				const Array<EntityRef>& selected = m_editor->getSelectedEntities();
+				EntityPtr e = scene->getRectAtEx(toLumix(mouse_canvas_pos), toLumix(size), selected.empty() ? INVALID_ENTITY : selected[0]);
+				if (!e.isValid()) {
+					e = scene->getRectAtEx(toLumix(mouse_canvas_pos), toLumix(size), INVALID_ENTITY);
+				}
 				if (e.isValid()) {
 					EntityRef r = (EntityRef)e;
-					m_editor->selectEntities(&r, 1, false);
+					m_editor->selectEntities(Span(&r, 1), false);
 				}
 			}
 
@@ -466,6 +502,36 @@ private:
 			if (has_rect && ImGui::BeginPopupContextItem("context"))
 			{
 				EntityRef e = m_editor->getSelectedEntities()[0];
+				if (ImGui::BeginMenu("Create child"))
+				{
+					if (ImGui::MenuItem("Button")) createChild(e, GUI_BUTTON_TYPE);
+					if (ImGui::MenuItem("Image")) createChild(e, GUI_IMAGE_TYPE);
+					if (ImGui::MenuItem("Rect")) createChild(e, GUI_RECT_TYPE);
+					if (ImGui::MenuItem("Text")) createChild(e, GUI_TEXT_TYPE);
+					if (ImGui::MenuItem("Render target")) createChild(e, GUI_RENDER_TARGET_TYPE);
+					ImGui::EndMenu();
+				}
+				if (ImGui::BeginMenu("Align"))
+				{
+					if (ImGui::MenuItem("Top")) align(e, (u8)EdgeMask::TOP);
+					if (ImGui::MenuItem("Right")) align(e, (u8)EdgeMask::RIGHT);
+					if (ImGui::MenuItem("Bottom")) align(e, (u8)EdgeMask::BOTTOM);
+					if (ImGui::MenuItem("Left")) align(e, (u8)EdgeMask::LEFT);
+					if (ImGui::MenuItem("Center horizontal")) align(e, (u8)EdgeMask::CENTER_HORIZONTAL);
+					if (ImGui::MenuItem("Center vertical")) align(e, (u8)EdgeMask::CENTER_VERTICAL);
+					ImGui::EndMenu();
+				}
+				if (ImGui::BeginMenu("Expand"))
+				{
+					if (ImGui::MenuItem("All")) expand(e, (u8)EdgeMask::ALL);
+					if (ImGui::MenuItem("Top")) expand(e, (u8)EdgeMask::TOP);
+					if (ImGui::MenuItem("Right")) expand(e, (u8)EdgeMask::RIGHT);
+					if (ImGui::MenuItem("Bottom")) expand(e, (u8)EdgeMask::BOTTOM);
+					if (ImGui::MenuItem("Left")) expand(e, (u8)EdgeMask::LEFT);
+					if (ImGui::MenuItem("Horizontal")) expand(e, (u8)EdgeMask::HORIZONTAL);
+					if (ImGui::MenuItem("Vertical")) expand(e, (u8)EdgeMask::VERTICAL);
+					ImGui::EndMenu();
+				}
 				if (ImGui::BeginMenu("Make relative"))
 				{
 					if (ImGui::MenuItem("All")) makeRelative(e, toLumix(size), (u8)EdgeMask::ALL);
@@ -485,25 +551,16 @@ private:
 					if (ImGui::MenuItem("Left")) makeAbsolute(e, toLumix(size), (u8)EdgeMask::LEFT);
 					ImGui::EndMenu();
 				}
-				if (ImGui::BeginMenu("Expand"))
-				{
-					if (ImGui::MenuItem("All")) expand(e, (u8)EdgeMask::ALL);
-					if (ImGui::MenuItem("Top")) expand(e, (u8)EdgeMask::TOP);
-					if (ImGui::MenuItem("Right")) expand(e, (u8)EdgeMask::RIGHT);
-					if (ImGui::MenuItem("Bottom")) expand(e, (u8)EdgeMask::BOTTOM);
-					if (ImGui::MenuItem("Left")) expand(e, (u8)EdgeMask::LEFT);
-					if (ImGui::MenuItem("Horizontal")) expand(e, (u8)EdgeMask::HORIZONTAL);
-					if (ImGui::MenuItem("Vertical")) expand(e, (u8)EdgeMask::VERTICAL);
-					ImGui::EndMenu();
-				}
-				if (ImGui::BeginMenu("Align"))
-				{
-					if (ImGui::MenuItem("Top")) align(e, (u8)EdgeMask::TOP);
-					if (ImGui::MenuItem("Right")) align(e, (u8)EdgeMask::RIGHT);
-					if (ImGui::MenuItem("Bottom")) align(e, (u8)EdgeMask::BOTTOM);
-					if (ImGui::MenuItem("Left")) align(e, (u8)EdgeMask::LEFT);
-					if (ImGui::MenuItem("Center horizontal")) align(e, (u8)EdgeMask::CENTER_HORIZONTAL);
-					if (ImGui::MenuItem("Center vertical")) align(e, (u8)EdgeMask::CENTER_VERTICAL);
+				if (ImGui::BeginMenu("Anchor")) {
+					if (ImGui::MenuItem("Center")) anchor(e, (u8)EdgeMask::CENTER_HORIZONTAL |  (u8)EdgeMask::CENTER_VERTICAL);
+					if (ImGui::MenuItem("Left middle")) anchor(e, (u8)EdgeMask::LEFT |  (u8)EdgeMask::CENTER_VERTICAL);
+					if (ImGui::MenuItem("Right middle")) anchor(e, (u8)EdgeMask::RIGHT |  (u8)EdgeMask::CENTER_VERTICAL);
+					if (ImGui::MenuItem("Top center")) anchor(e, (u8)EdgeMask::TOP |  (u8)EdgeMask::CENTER_HORIZONTAL);
+					if (ImGui::MenuItem("Bottom center")) anchor(e, (u8)EdgeMask::BOTTOM |  (u8)EdgeMask::CENTER_HORIZONTAL);
+					if (ImGui::MenuItem("Top left")) anchor(e, (u8)EdgeMask::TOP |  (u8)EdgeMask::LEFT);
+					if (ImGui::MenuItem("Top right")) anchor(e, (u8)EdgeMask::TOP |  (u8)EdgeMask::RIGHT);
+					if (ImGui::MenuItem("Bottom left")) anchor(e, (u8)EdgeMask::BOTTOM |  (u8)EdgeMask::LEFT);
+					if (ImGui::MenuItem("Bottom right")) anchor(e, (u8)EdgeMask::BOTTOM |  (u8)EdgeMask::RIGHT);
 					ImGui::EndMenu();
 				}
 				if (ImGui::BeginMenu("Copy position"))
@@ -518,16 +575,6 @@ private:
 					ImGui::EndMenu();
 				}
 				if (ImGui::MenuItem("Paste")) paste(e);
-
-				if (ImGui::BeginMenu("Create child"))
-				{
-					if (ImGui::MenuItem("Button")) createChild(e, GUI_BUTTON_TYPE);
-					if (ImGui::MenuItem("Image")) createChild(e, GUI_IMAGE_TYPE);
-					if (ImGui::MenuItem("Rect")) createChild(e, GUI_RECT_TYPE);
-					if (ImGui::MenuItem("Text")) createChild(e, GUI_TEXT_TYPE);
-					if (ImGui::MenuItem("Render target")) createChild(e, GUI_RENDER_TARGET_TYPE);
-					ImGui::EndMenu();
-				}
 
 				if (ImGui::BeginMenu("Layout")) {
 					static int cols = 1;
@@ -600,7 +647,7 @@ private:
 		m_editor->beginCommandGroup(crc32("create_gui_rect_child"));
 		EntityRef child = m_editor->addEntity();
 		m_editor->makeParent(entity, child);
-		m_editor->selectEntities(&child, 1, false);
+		m_editor->selectEntities(Span(&child, 1), false);
 		m_editor->addComponent(Span(&child, 1), GUI_RECT_TYPE);
 		if (child_type != GUI_RECT_TYPE) {
 			m_editor->addComponent(Span(&child, 1), child_type);
@@ -611,40 +658,35 @@ private:
 
 	void setRectProperty(EntityRef e, const char* prop_name, float value)
 	{
-		m_editor->setProperty(GUI_RECT_TYPE, -1, prop_name, Span(&e, 1), value);
+		m_editor->setProperty(GUI_RECT_TYPE, "", -1, prop_name, Span(&e, 1), value);
 	}
 
 
-	void makeAbsolute(EntityRef entity, const Vec2& canvas_size, u8 mask)
-	{
+	void makeAbsolute(EntityRef entity, const Vec2& canvas_size, u8 mask) {
 		GUIScene* scene = (GUIScene*)m_editor->getUniverse()->getScene(crc32("gui"));
 
 		EntityRef parent = (EntityRef)scene->getUniverse().getParent(entity);
-		GUIScene::Rect parent_rect = scene->getRectOnCanvas(parent, canvas_size);
-		GUIScene::Rect child_rect = scene->getRectOnCanvas(entity, canvas_size);
+		GUIScene::Rect parent_rect = scene->getRectEx(parent, canvas_size);
+		GUIScene::Rect child_rect = scene->getRectEx(entity, canvas_size);
 
 		m_editor->beginCommandGroup(crc32("make_gui_rect_absolute"));
 
-		if (mask & (u8)EdgeMask::TOP)
-		{
+		if (mask & (u8)EdgeMask::TOP) {
 			setRectProperty(entity, "Top Relative", 0);
 			setRectProperty(entity, "Top Points", child_rect.y - parent_rect.y);
 		}
 		
-		if (mask & (u8)EdgeMask::LEFT)
-		{
+		if (mask & (u8)EdgeMask::LEFT) {
 			setRectProperty(entity, "Left Relative", 0);
 			setRectProperty(entity, "Left Points", child_rect.x - parent_rect.x);
 		}
 
-		if (mask & (u8)EdgeMask::RIGHT)
-		{
+		if (mask & (u8)EdgeMask::RIGHT) {
 			setRectProperty(entity, "Right Relative", 0);
 			setRectProperty(entity, "Right Points", child_rect.x + child_rect.w - parent_rect.x);
 		}
 		
-		if (mask & (u8)EdgeMask::BOTTOM)
-		{
+		if (mask & (u8)EdgeMask::BOTTOM) {
 			setRectProperty(entity, "Bottom Relative", 0);
 			setRectProperty(entity, "Bottom Points", child_rect.y + child_rect.h - parent_rect.y);
 		}
@@ -652,6 +694,48 @@ private:
 		m_editor->endCommandGroup();
 	}
 
+	void anchor(EntityRef entity, u8 mask) {
+		GUIScene* scene = (GUIScene*)m_editor->getUniverse()->getScene(crc32("gui"));
+
+		m_editor->beginCommandGroup(crc32("anchor_gui_rect"));
+
+		float br = scene->getRectBottomRelative(entity);
+		float tr = scene->getRectTopRelative(entity);
+		float rr = scene->getRectRightRelative(entity);
+		float lr = scene->getRectLeftRelative(entity);
+
+		if (mask & (u8)EdgeMask::TOP) {
+			setRectProperty(entity, "Bottom Relative", 0);
+			setRectProperty(entity, "Top Relative", 0);
+		}
+
+		if (mask & (u8)EdgeMask::LEFT) {
+			setRectProperty(entity, "Right Relative", 0);
+			setRectProperty(entity, "Left Relative", 0);
+		}
+
+		if (mask & (u8)EdgeMask::RIGHT) {
+			setRectProperty(entity, "Left Relative", 1);
+			setRectProperty(entity, "Right Relative", 1);
+		}
+
+		if (mask & (u8)EdgeMask::BOTTOM) {
+			setRectProperty(entity, "Top Relative", 1);
+			setRectProperty(entity, "Bottom Relative", 1);
+		}
+
+		if (mask & (u8)EdgeMask::CENTER_VERTICAL) {
+			setRectProperty(entity, "Top Relative", 0.5f);
+			setRectProperty(entity, "Bottom Relative", 0.5f);
+		}
+
+		if (mask & (u8)EdgeMask::CENTER_HORIZONTAL) {
+			setRectProperty(entity, "Left Relative", 0.5f);
+			setRectProperty(entity, "Right Relative", 0.5f);
+		}
+
+		m_editor->endCommandGroup();
+	}
 
 	void align(EntityRef entity, u8 mask)
 	{
@@ -757,8 +841,8 @@ private:
 		GUIScene* scene = (GUIScene*)m_editor->getUniverse()->getScene(crc32("gui"));
 		
 		EntityPtr parent = scene->getUniverse().getParent(entity);
-		GUIScene::Rect parent_rect = scene->getRectOnCanvas(parent, canvas_size);
-		GUIScene::Rect child_rect = scene->getRectOnCanvas(entity, canvas_size);
+		GUIScene::Rect parent_rect = scene->getRectEx(parent, canvas_size);
+		GUIScene::Rect child_rect = scene->getRectEx(entity, canvas_size);
 
 		m_editor->beginCommandGroup(crc32("make_gui_rect_relative"));
 		
@@ -821,13 +905,13 @@ struct StudioAppPlugin : StudioApp::IPlugin
 
 	void init() override
 	{
-		m_app.registerComponent("gui_button", "GUI / Button");
-		m_app.registerComponent("gui_canvas", "GUI / Canvas");
-		m_app.registerComponent("gui_image", "GUI / Image", Sprite::TYPE, "Sprite");
-		m_app.registerComponent("gui_input_field", "GUI / Input field");
-		m_app.registerComponent("gui_rect", "GUI / Rect");
-		m_app.registerComponent("gui_render_target", "GUI / Render target");
-		m_app.registerComponent("gui_text", "GUI / Text");
+		m_app.registerComponent("", "gui_button", "GUI / Button");
+		m_app.registerComponent("", "gui_canvas", "GUI / Canvas");
+		m_app.registerComponent(ICON_FA_IMAGE, "gui_image", "GUI / Image", Sprite::TYPE, "Sprite");
+		m_app.registerComponent(ICON_FA_KEYBOARD, "gui_input_field", "GUI / Input field");
+		m_app.registerComponent("", "gui_rect", "GUI / Rect");
+		m_app.registerComponent("", "gui_render_target", "GUI / Render target");
+		m_app.registerComponent(ICON_FA_FONT, "gui_text", "GUI / Text");
 
 		IAllocator& allocator = m_app.getAllocator();
 		m_gui_editor = LUMIX_NEW(allocator, GUIEditor)(m_app);

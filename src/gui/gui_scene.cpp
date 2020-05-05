@@ -95,8 +95,8 @@ private:
 
 struct GUIButton
 {
-	u32 normal_color = 0xffFFffFF;
 	u32 hovered_color = 0xffFFffFF;
+	OS::CursorType hovered_cursor = OS::CursorType::UNDEFINED;
 };
 
 
@@ -168,6 +168,7 @@ struct GUISceneImpl final : GUIScene
 		, m_canvas(allocator)
 		, m_rect_hovered(allocator)
 		, m_rect_hovered_out(allocator)
+		, m_rect_mouse_down(allocator)
 		, m_unhandled_mouse_button(allocator)
 		, m_button_clicked(allocator)
 		, m_buttons_down_count(0)
@@ -221,7 +222,7 @@ struct GUISceneImpl final : GUIScene
 	}
 
 
-	void renderRect(GUIRect& rect, Pipeline& pipeline, const Rect& parent_rect)
+	void renderRect(GUIRect& rect, Pipeline& pipeline, const Rect& parent_rect, bool is_main)
 	{
 		if (!rect.flags.isSet(GUIRect::IS_VALID)) return;
 		if (!rect.flags.isSet(GUIRect::IS_ENABLED)) return;
@@ -234,9 +235,24 @@ struct GUISceneImpl final : GUIScene
 		Draw2D& draw = pipeline.getDraw2D();
 		if (rect.flags.isSet(GUIRect::IS_CLIP)) draw.pushClipRect({ l, t }, { r, b });
 
+		auto button_iter = m_buttons.find(rect.entity);
+		const Color* img_color = rect.image ? (Color*)&rect.image->color : nullptr;
+		const Color* txt_color = rect.text ? (Color*)&rect.text->color : nullptr;
+		if (is_main && button_iter.isValid()) {
+			GUIButton& button = button_iter.value();
+			if (m_cursor_pos.x >= l && m_cursor_pos.x <= r && m_cursor_pos.y >= t && m_cursor_pos.y <= b) {
+				if (button.hovered_cursor != OS::CursorType::UNDEFINED && !m_cursor_set) {
+					m_cursor_type = button_iter.value().hovered_cursor;
+					m_cursor_set = true;
+				}
+				img_color = (Color*)&button.hovered_color;
+				txt_color = (Color*)&button.hovered_color;
+			}
+		}
+
 		if (rect.image && rect.image->flags.isSet(GUIImage::IS_ENABLED))
 		{
-			const Color color = *(Color*)&rect.image->color;
+			const Color color = *img_color;
 			if (rect.image->sprite && rect.image->sprite->getTexture())
 			{
 				Sprite* sprite = rect.image->sprite;
@@ -251,6 +267,12 @@ struct GUISceneImpl final : GUIScene
 						r - tex->width + sprite->right,
 						b - tex->height + sprite->bottom
 					};
+					if (pos.l > pos.r) {
+						pos.l = pos.r = (pos.l + pos.r) * 0.5f;
+					}
+					if (pos.t > pos.b) {
+						pos.t = pos.b = (pos.t + pos.b) * 0.5f;
+					}
 					Quad uvs = {
 						sprite->left / (float)tex->width,
 						sprite->top / (float)tex->height,
@@ -296,8 +318,8 @@ struct GUISceneImpl final : GUIScene
 
 				switch (rect.text->vertical_align) {
 					case TextVAlign::TOP: break;
-					case TextVAlign::MIDDLE: text_pos.y = (t + b + font_size) * 0.5f; break;
-					case TextVAlign::BOTTOM: text_pos.y = b; break;
+					case TextVAlign::MIDDLE: text_pos.y = (t + b + getAscender(*font) - getDescender(*font)) * 0.5f; break;
+					case TextVAlign::BOTTOM: text_pos.y = b + getDescender(*font); break;
 				}
 
 				switch (rect.text->horizontal_align) {
@@ -306,7 +328,7 @@ struct GUISceneImpl final : GUIScene
 					case TextHAlign::CENTER: text_pos.x = (r + l - text_size.x) * 0.5f; break;
 				}
 
-				draw.addText(*font, text_pos, *(Color*)&rect.text->color, text_cstr);
+				draw.addText(*font, text_pos, *txt_color, text_cstr);
 				renderTextCursor(rect, draw, text_pos);
 			}
 		}
@@ -317,7 +339,7 @@ struct GUISceneImpl final : GUIScene
 			int idx = m_rects.find((EntityRef)child);
 			if (idx >= 0)
 			{
-				renderRect(*m_rects.at(idx), pipeline, { l, t, r - l, b - t });
+				renderRect(*m_rects.at(idx), pipeline, { l, t, r - l, b - t }, is_main);
 			}
 			child = m_universe.getNextSibling((EntityRef)child);
 		}
@@ -326,26 +348,19 @@ struct GUISceneImpl final : GUIScene
 
 	IVec2 getCursorPosition() override { return m_cursor_pos; }
 
-	void render(Pipeline& pipeline, const Vec2& canvas_size) override {
+	void render(Pipeline& pipeline, const Vec2& canvas_size, bool is_main) override {
 		m_canvas_size = canvas_size;
+		if (is_main) {
+			m_cursor_type = OS::CursorType::DEFAULT;
+			m_cursor_set = false;
+		}
 		for (GUICanvas& canvas : m_canvas) {
 			const int idx = m_rects.find(canvas.entity);
 			if (idx >= 0) {
 				GUIRect* r = m_rects.at(idx);
-				renderRect(*r, pipeline, {0, 0, canvas_size.x, canvas_size.y});
+				renderRect(*r, pipeline, {0, 0, canvas_size.x, canvas_size.y}, is_main);
 			}
 		}
-	}
-
-	Vec4 getButtonNormalColorRGBA(EntityRef entity) override
-	{
-		return ABGRu32ToRGBAVec4(m_buttons[entity].normal_color);
-	}
-
-
-	void setButtonNormalColorRGBA(EntityRef entity, const Vec4& color) override
-	{
-		m_buttons[entity].normal_color = RGBAVec4ToABGRu32(color);
 	}
 
 	Vec4 getButtonHoveredColorRGBA(EntityRef entity) override
@@ -359,6 +374,13 @@ struct GUISceneImpl final : GUIScene
 		m_buttons[entity].hovered_color = RGBAVec4ToABGRu32(color);
 	}
 
+	OS::CursorType getButtonHoveredCursor(EntityRef entity) override {
+		return m_buttons[entity].hovered_cursor;
+	}
+
+	void setButtonHoveredCursor(EntityRef entity, OS::CursorType cursor) override {
+		m_buttons[entity].hovered_cursor = cursor;
+	}
 
 	void enableImage(EntityRef entity, bool enable) override { m_rects[entity]->image->flags.set(GUIImage::IS_ENABLED, enable); }
 	bool isImageEnabled(EntityRef entity) override { return m_rects[entity]->image->flags.isSet(GUIImage::IS_ENABLED); }
@@ -434,9 +456,11 @@ struct GUISceneImpl final : GUIScene
 	}
 
 
-	EntityPtr getRectAt(const GUIRect& rect, const Vec2& pos, const Rect& parent_rect) const
+	EntityPtr getRectAt(const GUIRect& rect, const Vec2& pos, const Rect& parent_rect, EntityPtr limit) const
 	{
 		if (!rect.flags.isSet(GUIRect::IS_VALID)) return INVALID_ENTITY;
+		if (!rect.flags.isSet(GUIRect::IS_ENABLED)) return INVALID_ENTITY;
+		if (rect.entity.index == limit.index) return INVALID_ENTITY;
 
 		Rect r;
 		r.x = parent_rect.x + rect.left.points + parent_rect.w * rect.left.relative;
@@ -455,21 +479,27 @@ struct GUISceneImpl final : GUIScene
 			if (idx < 0) continue;
 
 			GUIRect* child_rect = m_rects.at(idx);
-			EntityPtr entity = getRectAt(*child_rect, pos, r);
+			EntityPtr entity = getRectAt(*child_rect, pos, r, limit);
 			if (entity.isValid()) return entity;
 		}
 
 		return intersect ? rect.entity : INVALID_ENTITY;
 	}
+	
+	EntityPtr getRectAt(const Vec2& pos) const override { return getRectAtEx(pos, m_canvas_size, INVALID_ENTITY); }
 
+	bool isOver(const Vec2& pos, EntityRef e) override {
+		const Rect r =  getRect(e);
+		return pos.x >= r.x && pos.y >= r.y && pos.x <= r.x + r.w && pos.y <= r.y + r.h;
+	}
 
-	EntityPtr getRectAt(const Vec2& pos, const Vec2& canvas_size) const override
+	EntityPtr getRectAtEx(const Vec2& pos, const Vec2& canvas_size, EntityPtr limit) const override
 	{
 		for (const GUICanvas& canvas : m_canvas) {
 			const int idx = m_rects.find(canvas.entity);
 			if (idx >= 0) {
 				const GUIRect* r = m_rects.at(idx);
-				const EntityPtr e = getRectAt(*r, pos, { 0, 0, canvas_size.x, canvas_size.y });
+				const EntityPtr e = getRectAt(*r, pos, { 0, 0, canvas_size.x, canvas_size.y }, limit);
 				if (e.isValid()) return e;
 			}
 		}
@@ -490,17 +520,17 @@ struct GUISceneImpl final : GUIScene
 
 	Rect getRect(EntityRef entity) const override
 	{
-		return getRectOnCanvas(entity, m_canvas_size);
+		return getRectEx(entity, m_canvas_size);
 	}
 
 
-	Rect getRectOnCanvas(EntityPtr entity, const Vec2& canvas_size) const override
+	Rect getRectEx(EntityPtr entity, const Vec2& canvas_size) const override
 	{
 		if (!entity.isValid()) return { 0, 0, canvas_size.x, canvas_size.y };
 		int idx = m_rects.find((EntityRef)entity);
 		if (idx < 0) return { 0, 0, canvas_size.x, canvas_size.y };
 		EntityPtr parent = m_universe.getParent((EntityRef)entity);
-		Rect parent_rect = getRectOnCanvas(parent, canvas_size);
+		Rect parent_rect = getRectEx(parent, canvas_size);
 		GUIRect* gui = m_rects[(EntityRef)entity];
 		float l = parent_rect.x + parent_rect.w * gui->left.relative + gui->left.points;
 		float r = parent_rect.x + parent_rect.w * gui->right.relative + gui->right.points;
@@ -512,7 +542,7 @@ struct GUISceneImpl final : GUIScene
 
 	void setRectClip(EntityRef entity, bool enable) override { m_rects[entity]->flags.set(GUIRect::IS_CLIP, enable); }
 	bool getRectClip(EntityRef entity) override { return m_rects[entity]->flags.isSet(GUIRect::IS_CLIP); }
-	void enableRect(EntityRef entity, bool enable) override { m_rects[entity]->flags.set(GUIRect::IS_ENABLED, enable); }
+	void enableRect(EntityRef entity, bool enable) override { return m_rects[entity]->flags.set(GUIRect::IS_ENABLED, enable); }
 	bool isRectEnabled(EntityRef entity) override { return m_rects[entity]->flags.isSet(GUIRect::IS_ENABLED); }
 	float getRectLeftPoints(EntityRef entity) override { return m_rects[entity]->left.points; }
 	void setRectLeftPoints(EntityRef entity, float value) override { m_rects[entity]->left.points = value; }
@@ -533,7 +563,6 @@ struct GUISceneImpl final : GUIScene
 	void setRectBottomPoints(EntityRef entity, float value) override { m_rects[entity]->bottom.points = value; }
 	float getRectBottomRelative(EntityRef entity) override { return m_rects[entity]->bottom.relative; }
 	void setRectBottomRelative(EntityRef entity, float value) override { m_rects[entity]->bottom.relative = value; }
-
 
 	void setTextFontSize(EntityRef entity, int value) override
 	{
@@ -633,12 +662,6 @@ struct GUISceneImpl final : GUIScene
 	{
 		auto iter = m_buttons.find(rect.entity);
 		if (!iter.isValid()) return;
-
-		const GUIButton& button = iter.value();
-
-		if (rect.image) rect.image->color = button.normal_color;
-		if (rect.text) rect.text->color = button.normal_color;
-
 		m_rect_hovered_out.invoke(rect.entity);
 	}
 
@@ -647,12 +670,6 @@ struct GUISceneImpl final : GUIScene
 	{
 		auto iter = m_buttons.find(rect.entity);
 		if (!iter.isValid()) return;
-
-		const GUIButton& button = iter.value();
-
-		if (rect.image) rect.image->color = button.hovered_color;
-		if (rect.text) rect.text->color = button.hovered_color;
-
 		m_rect_hovered.invoke(rect.entity);
 	}
 
@@ -663,12 +680,13 @@ struct GUISceneImpl final : GUIScene
 
 		const Rect& r = getRectOnCanvas(parent_rect, rect);
 
-		bool is = contains(r, mouse_pos);
-		bool was = contains(r, prev_mouse_pos);
-		if (is != was && m_buttons.find(rect.entity).isValid())
-		{
-			is ? hover(rect) : hoverOut(rect);
+		const bool is = contains(r, mouse_pos);
+		const bool was = contains(r, prev_mouse_pos);
+		if (is != was && m_buttons.find(rect.entity).isValid()) {
+			is  ? hover(rect) : hoverOut(rect);
 		}
+
+
 
 		for (EntityPtr e = m_universe.getFirstChild(rect.entity); e.isValid(); e = m_universe.getNextSibling((EntityRef)e))
 		{
@@ -704,37 +722,40 @@ struct GUISceneImpl final : GUIScene
 		const Rect& r = getRectOnCanvas(parent_rect, rect);
 		bool handled = false;
 		
-		if (contains(r, pos) && contains(r, m_mouse_down_pos)) {
-			auto button_iter = m_buttons.find(rect.entity);
-			if (button_iter.isValid())
-			{
-				handled = true;
-				if (is_up && isButtonDown(rect.entity))
+		if (contains(r, pos)) {
+			m_rect_mouse_down.invoke(rect.entity, event.data.button.x, event.data.button.y);
+			if (contains(r, m_mouse_down_pos)) {
+				auto button_iter = m_buttons.find(rect.entity);
+				if (button_iter.isValid())
 				{
-					m_focused_entity = INVALID_ENTITY;
-					m_button_clicked.invoke(rect.entity);
-				}
-				if (!is_up)
-				{
-					if (m_buttons_down_count < lengthOf(m_buttons_down))
+					handled = true;
+					if (is_up && isButtonDown(rect.entity))
 					{
-						m_buttons_down[m_buttons_down_count] = rect.entity;
-						++m_buttons_down_count;
+						m_focused_entity = INVALID_ENTITY;
+						m_button_clicked.invoke(rect.entity);
 					}
-					else
+					if (!is_up)
 					{
-						logError("GUI") << "Too many buttons pressed at once";
+						if (m_buttons_down_count < lengthOf(m_buttons_down))
+						{
+							m_buttons_down[m_buttons_down_count] = rect.entity;
+							++m_buttons_down_count;
+						}
+						else
+						{
+							logError("GUI") << "Too many buttons pressed at once";
+						}
 					}
 				}
-			}
 			
-			if (rect.input_field && is_up) {
-				handled = true;
-				m_focused_entity = rect.entity;
-				if (rect.text)
-				{
-					rect.input_field->cursor = rect.text->text.length();
-					rect.input_field->anim = 0;
+				if (rect.input_field && is_up) {
+					handled = true;
+					m_focused_entity = rect.entity;
+					if (rect.text)
+					{
+						rect.input_field->cursor = rect.text->text.length();
+						rect.input_field->anim = 0;
+					}
 				}
 			}
 		}
@@ -842,6 +863,7 @@ struct GUISceneImpl final : GUIScene
 				case InputSystem::Event::BUTTON:
 					if (event.device->type == InputSystem::Device::MOUSE)
 					{
+						if (event.data.button.key_id != (u32)OS::MouseButton::LEFT) break;
 						if (event.data.button.down)
 						{
 							m_mouse_down_pos.x = event.data.button.x;
@@ -889,6 +911,7 @@ struct GUISceneImpl final : GUIScene
 		if (paused) return;
 
 		handleInput();
+		m_system.setCursor(m_cursor_type);
 		blinkCursor(time_delta);
 	}
 
@@ -897,16 +920,17 @@ struct GUISceneImpl final : GUIScene
 	{
 		int idx = m_rects.find(entity);
 		GUIRect* rect;
-		if (idx >= 0)
-		{
+		if (idx >= 0) {
 			rect = m_rects.at(idx);
-			*rect = GUIRect();
 		}
-		else
-		{
+		else {
 			rect = LUMIX_NEW(m_allocator, GUIRect);
 			m_rects.insert(entity, rect);
 		}
+		rect->top = {0, 0};
+		rect->right = {0, 1};
+		rect->bottom = {0, 1};
+		rect->left = {0, 0};
 		rect->entity = entity;
 		rect->flags.set(GUIRect::IS_VALID);
 		rect->flags.set(GUIRect::IS_ENABLED);
@@ -952,10 +976,8 @@ struct GUISceneImpl final : GUIScene
 		}
 		GUIImage* image = m_rects.at(idx)->image;
 		GUIButton& button = m_buttons.insert(entity, GUIButton());
-		if (image)
-		{
+		if (image) {
 			button.hovered_color = image->color;
-			button.normal_color = image->color;
 		}
 		m_universe.onComponentCreated(entity, GUI_BUTTON_TYPE, this);
 	}
@@ -1018,7 +1040,7 @@ struct GUISceneImpl final : GUIScene
 	{
 		GUIRect* rect = m_rects[entity];
 		rect->flags.set(GUIRect::IS_VALID, false);
-		if (rect->image == nullptr && rect->text == nullptr && rect->input_field == nullptr)
+		if (!rect->image && !rect->text && !rect->input_field && !rect->render_target)
 		{
 			LUMIX_DELETE(m_allocator, rect);
 			m_rects.erase(entity);
@@ -1043,6 +1065,7 @@ struct GUISceneImpl final : GUIScene
 		GUIRect* rect = m_rects[entity];
 		rect->render_target = nullptr;
 		m_universe.onComponentDestroyed(entity, GUI_RENDER_TARGET_TYPE, this);
+		checkGarbage(*rect);
 	}
 
 
@@ -1052,6 +1075,20 @@ struct GUISceneImpl final : GUIScene
 		LUMIX_DELETE(m_allocator, rect->input_field);
 		rect->input_field = nullptr;
 		m_universe.onComponentDestroyed(entity, GUI_INPUT_FIELD_TYPE, this);
+		checkGarbage(*rect);
+	}
+
+
+	void checkGarbage(GUIRect& rect) {
+		if (rect.image) return;
+		if (rect.text) return;
+		if (rect.input_field) return;
+		if (rect.render_target) return;
+		if (rect.flags.isSet(GUIRect::IS_VALID)) return;
+			
+		const EntityRef e = rect.entity;
+		LUMIX_DELETE(m_allocator, &rect);
+		m_rects.erase(e);
 	}
 
 
@@ -1061,6 +1098,7 @@ struct GUISceneImpl final : GUIScene
 		LUMIX_DELETE(m_allocator, rect->image);
 		rect->image = nullptr;
 		m_universe.onComponentDestroyed(entity, GUI_IMAGE_TYPE, this);
+		checkGarbage(*rect);
 	}
 
 
@@ -1070,6 +1108,7 @@ struct GUISceneImpl final : GUIScene
 		LUMIX_DELETE(m_allocator, rect->text);
 		rect->text = nullptr;
 		m_universe.onComponentDestroyed(entity, GUI_TEXT_TYPE, this);
+		checkGarbage(*rect);
 	}
 
 
@@ -1113,8 +1152,8 @@ struct GUISceneImpl final : GUIScene
 		{
 			serializer.write(iter.key());
 			const GUIButton& button = iter.value();
-			serializer.write(button.normal_color);
 			serializer.write(button.hovered_color);
+			serializer.write(button.hovered_cursor);
 		}
 
 		serializer.write(m_canvas.size());
@@ -1130,12 +1169,21 @@ struct GUISceneImpl final : GUIScene
 		u32 count = serializer.read<u32>();
 		for (u32 i = 0; i < count; ++i)
 		{
-			GUIRect* rect = LUMIX_NEW(m_allocator, GUIRect);
-			serializer.read(rect->flags);
-			serializer.read(rect->entity);
-			if (rect->flags.isSet(GUIRect::IS_VALID)) {
-				rect->entity = entity_map.get(rect->entity);
+			u32 flags;
+			EntityRef entity;
+			serializer.read(flags);
+			serializer.read(entity);
+			entity = entity_map.get(entity);
+			int idx = m_rects.find(entity);
+			if (idx < 0) {
+				GUIRect* rect = LUMIX_NEW(m_allocator, GUIRect);
+				idx = m_rects.insert(entity, rect);
 			}
+			GUIRect* rect = m_rects.at(idx);
+			static_assert(sizeof(flags) == sizeof(rect->flags));
+			rect->entity = entity;
+			rect->flags.base = flags;
+
 			serializer.read(rect->top);
 			serializer.read(rect->right);
 			serializer.read(rect->bottom);
@@ -1195,8 +1243,8 @@ struct GUISceneImpl final : GUIScene
 			serializer.read(e);
 			e = entity_map.get(e);
 			GUIButton& button = m_buttons.insert(e, GUIButton());
-			serializer.read(button.normal_color);
 			serializer.read(button.hovered_color);
+			serializer.read(button.hovered_cursor);
 			m_universe.onComponentCreated(e, GUI_BUTTON_TYPE, this);
 		}
 		
@@ -1217,10 +1265,10 @@ struct GUISceneImpl final : GUIScene
 		m_rects[entity]->render_target = texture_handle;
 	}
 
-	
 	DelegateList<void(EntityRef)>& buttonClicked() override { return m_button_clicked; }
 	DelegateList<void(EntityRef)>& rectHovered() override { return m_rect_hovered; }
 	DelegateList<void(EntityRef)>& rectHoveredOut() override { return m_rect_hovered_out; }
+	DelegateList<void(EntityRef, float, float)>& rectMouseDown() override { return m_rect_mouse_down; }
 	DelegateList<void(bool, int, int)>& mousedButtonUnhandled() override { return m_unhandled_mouse_button; }
 
 	Universe& getUniverse() override { return m_universe; }
@@ -1236,13 +1284,16 @@ struct GUISceneImpl final : GUIScene
 	EntityRef m_buttons_down[16];
 	u32 m_buttons_down_count;
 	EntityPtr m_focused_entity = INVALID_ENTITY;
-	IVec2 m_cursor_pos;
+	IVec2 m_cursor_pos = {-10000, -10000};
+	OS::CursorType m_cursor_type = OS::CursorType::DEFAULT;
+	bool m_cursor_set;
 	FontManager* m_font_manager = nullptr;
 	Vec2 m_canvas_size;
 	Vec2 m_mouse_down_pos;
 	DelegateList<void(EntityRef)> m_button_clicked;
 	DelegateList<void(EntityRef)> m_rect_hovered;
 	DelegateList<void(EntityRef)> m_rect_hovered_out;
+	DelegateList<void(EntityRef, float, float)> m_rect_mouse_down;
 	DelegateList<void(bool, i32, i32)> m_unhandled_mouse_button;
 };
 

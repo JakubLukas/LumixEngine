@@ -286,9 +286,9 @@ void FBXImporter::gatherAnimations(const ofbx::IScene& scene)
 
 static int findSubblobIndex(const OutputMemoryStream& haystack, const OutputMemoryStream& needle, const Array<int>& subblobs, int first_subblob)
 {
-	const u8* data = (const u8*)haystack.getData();
-	const u8* needle_data = (const u8*)needle.getData();
-	int step_size = (int)needle.getPos();
+	const u8* data = (const u8*)haystack.data();
+	const u8* needle_data = (const u8*)needle.data();
+	int step_size = (int)needle.size();
 	int idx = first_subblob;
 	while(idx != -1)
 	{
@@ -433,9 +433,9 @@ static void computeTangents(Array<ofbx::Vec3>& out, int vertex_count, const ofbx
 		const ofbx::Vec3 v0 = vertices[i + 0];
 		const ofbx::Vec3 v1 = vertices[i + 1];
 		const ofbx::Vec3 v2 = vertices[i + 2];
-		const ofbx::Vec2 uv0 = uvs[0];
-		const ofbx::Vec2 uv1 = uvs[1];
-		const ofbx::Vec2 uv2 = uvs[2];
+		const ofbx::Vec2 uv0 = uvs[i + 0];
+		const ofbx::Vec2 uv1 = uvs[i + 1];
+		const ofbx::Vec2 uv2 = uvs[i + 2];
 
 		const ofbx::Vec3 dv10 = v1 - v0;
 		const ofbx::Vec3 dv20 = v2 - v0;
@@ -447,7 +447,13 @@ static void computeTangents(Array<ofbx::Vec3>& out, int vertex_count, const ofbx
 		tangent.x = (dv20.x * duv10.y - dv10.x * duv20.y) * dir;
 		tangent.y = (dv20.y * duv10.y - dv10.y * duv20.y) * dir;
 		tangent.z = (dv20.z * duv10.y - dv10.z * duv20.y) * dir;
-		out[i] = tangent;
+		const float l = 1 / sqrtf(float(tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z));
+		tangent.x *= l;
+		tangent.y *= l;
+		tangent.z *= l;
+		out[i + 0] = tangent;
+		out[i + 1] = tangent;
+		out[i + 2] = tangent;
 	}
 }
 
@@ -542,15 +548,15 @@ void FBXImporter::postprocessMeshes(const ImportConfig& cfg, const char* path)
 			if (tangents) writePackedVec3(tangents[i], transform_matrix, &blob);
 			if (import_mesh.is_skinned) writeSkin(skinning[i], &blob);
 
-			u8 first_byte = ((const u8*)blob.getData())[0];
+			u8 first_byte = blob.data()[0];
 
 			int idx = findSubblobIndex(import_mesh.vertex_data, blob, subblobs, first_subblob[first_byte]);
 			if (idx == -1)
 			{
 				subblobs.push(first_subblob[first_byte]);
 				first_subblob[first_byte] = subblobs.size() - 1;
-				import_mesh.indices.push((int)import_mesh.vertex_data.getPos() / vertex_size);
-				import_mesh.vertex_data.write(blob.getData(), vertex_size);
+				import_mesh.indices.push((int)import_mesh.vertex_data.size() / vertex_size);
+				import_mesh.vertex_data.write(blob.data(), vertex_size);
 			}
 			else
 			{
@@ -652,11 +658,11 @@ bool FBXImporter::setSource(const char* filename, bool ignore_geometry)
 		bones.clear();
 	}
 
-	Array<u8> data(allocator);
+	OutputMemoryStream data(allocator);
 	if (!filesystem.getContentSync(Path(filename), Ref(data))) return false;
 	
 	const u64 flags = ignore_geometry ? (u64)ofbx::LoadFlags::IGNORE_GEOMETRY : (u64)ofbx::LoadFlags::TRIANGULATE;
-	scene = ofbx::load(&data[0], data.size(), flags);
+	scene = ofbx::load(data.data(), (i32)data.size(), flags);
 	if (!scene)
 	{
 		logError("FBX") << "Failed to import \"" << filename << ": " << ofbx::getError() << "\n"
@@ -814,9 +820,11 @@ struct CaptureImpostorJob : Renderer::RenderJob {
 					pass_state.view_projection = pass_state.projection * pass_state.view;
 					pass_state.inv_view_projection = pass_state.view_projection.inverted();
 					pass_state.view_dir = Vec4(pass_state.view.inverted().transformVector(Vec3(0, 0, -1)), 0);
-
 					gpu::update(pass_buf, &pass_state, sizeof(pass_state));
+
+
 					gpu::useProgram(dc.program);
+					gpu::bindUniformBuffer(2, m_material_ub, dc.material->material_constants);
 					gpu::bindIndexBuffer(rd->index_buffer_handle);
 					gpu::bindVertexBuffer(0, rd->vertex_buffer_handle, 0, rd->vb_stride);
 					gpu::bindVertexBuffer(1, gpu::INVALID_BUFFER, 0, 0);
@@ -855,6 +863,7 @@ struct CaptureImpostorJob : Renderer::RenderJob {
 	Array<Drawcall> m_drawcalls;
 	AABB m_aabb;
 	float m_radius;
+	gpu::BufferGroupHandle m_material_ub;
 	Ref<Array<u32>> m_gb0;
 	Ref<Array<u32>> m_gb1;
 	Model* m_model;
@@ -874,6 +883,7 @@ bool FBXImporter::createImpostorTextures(Model* model, Ref<Array<u32>> gb0_rgba,
 	CaptureImpostorJob* job = LUMIX_NEW(allocator, CaptureImpostorJob)(gb0_rgba, gb1_rgba, size, allocator);
 	job->m_model = model;
 	job->m_capture_define = 1 << renderer->getShaderDefineIdx("DEFERRED");
+	job->m_material_ub = renderer->getMaterialUniformBuffer();
 	renderer->queue(job, 0);
 	renderer->frame();
 	renderer->waitForRender();
@@ -939,7 +949,7 @@ void FBXImporter::writeMaterials(const char* src, const ImportConfig& cfg)
 			<< "," << diffuse_color.b
 			<< ",1}\n";*/
 
-		if (!f.write(out_file.getData(), out_file.getPos())) {
+		if (!f.write(out_file.data(), out_file.size())) {
 			logError("FBX") << "Failed to write " << mat_src;
 		}
 		f.close();
@@ -1243,7 +1253,7 @@ void FBXImporter::writeAnimations(const char* src, const ImportConfig& cfg)
 			compressPositions(cfg.position_error, parent_scale, Ref(keys));
 		}
 
-		const u64 stream_translations_count_pos = out_file.getPos();
+		const u64 stream_translations_count_pos = out_file.size();
 		u32 translation_curves_count = 0;
 		write(translation_curves_count);
 		for (const ofbx::Object*& bone : bones) {
@@ -1274,7 +1284,7 @@ void FBXImporter::writeAnimations(const char* src, const ImportConfig& cfg)
 		}
 		memcpy(out_file.getMutableData() + stream_translations_count_pos, &translation_curves_count, sizeof(translation_curves_count));
 
-		const u64 stream_rotations_count_pos = out_file.getPos();
+		const u64 stream_rotations_count_pos = out_file.size();
 		u32 rotation_curves_count = 0;
 		write(rotation_curves_count);
 		u32 sampled_count = 0;
@@ -1318,7 +1328,7 @@ void FBXImporter::writeAnimations(const char* src, const ImportConfig& cfg)
 		memcpy(out_file.getMutableData() + stream_rotations_count_pos, &rotation_curves_count, sizeof(rotation_curves_count));
 
 		const StaticString<MAX_PATH_LENGTH> anim_path(anim.name, ".ani:", src);
-		compiler.writeCompiledResource(anim_path, Span((u8*)out_file.getData(), (i32)out_file.getPos()));
+		compiler.writeCompiledResource(anim_path, Span(out_file.data(), (i32)out_file.size()));
 	}
 }
 
@@ -1501,8 +1511,8 @@ void FBXImporter::writeGeometry(int mesh_idx)
 	aabb.merge(import_mesh.aabb);
 	radius_squared = maximum(radius_squared, import_mesh.radius_squared);
 
-	write((i32)import_mesh.vertex_data.getPos());
-	write(import_mesh.vertex_data.getData(), import_mesh.vertex_data.getPos());
+	write((i32)import_mesh.vertex_data.size());
+	write(import_mesh.vertex_data.data(), import_mesh.vertex_data.size());
 
 	write(sqrtf(radius_squared) * bounding_shape_scale);
 	aabb.min *= bounding_shape_scale;
@@ -1555,8 +1565,8 @@ void FBXImporter::writeGeometry(const ImportConfig& cfg)
 	for (const ImportMesh& import_mesh : meshes)
 	{
 		if (!import_mesh.import) continue;
-		write((i32)import_mesh.vertex_data.getPos());
-		write(import_mesh.vertex_data.getData(), import_mesh.vertex_data.getPos());
+		write((i32)import_mesh.vertex_data.size());
+		write(import_mesh.vertex_data.data(), import_mesh.vertex_data.size());
 	}
 	if (cfg.create_impostor) {
 		writeImpostorVertices(aabb);
@@ -1779,7 +1789,7 @@ int FBXImporter::getAttributeCount(const ImportMesh& mesh) const
 bool FBXImporter::areIndices16Bit(const ImportMesh& mesh) const
 {
 	int vertex_size = getVertexSize(mesh);
-	return !(mesh.import && mesh.vertex_data.getPos() / vertex_size > (1 << 16));
+	return !(mesh.import && mesh.vertex_data.size() / vertex_size > (1 << 16));
 }
 
 
@@ -1820,7 +1830,7 @@ void FBXImporter::writePhysicsTriMesh(OS::OutputFile& file)
 			file.write((const char*)&index, sizeof(index));
 		}
 		int vertex_size = getVertexSize(mesh);
-		int vertex_count = (i32)(mesh.vertex_data.getPos() / vertex_size);
+		int vertex_count = (i32)(mesh.vertex_data.size() / vertex_size);
 		offset += vertex_count;
 	}
 }
@@ -1854,7 +1864,7 @@ bool FBXImporter::writePhysics(const char* basename, const char* output_dir)
 	i32 count = 0;
 	for (auto& mesh : meshes)
 	{
-		if (mesh.import_physics) count += (i32)(mesh.vertex_data.getPos() / getVertexSize(mesh));
+		if (mesh.import_physics) count += (i32)(mesh.vertex_data.size() / getVertexSize(mesh));
 	}
 	file.write((const char*)&count, sizeof(count));
 	for (auto& mesh : meshes)
@@ -1862,9 +1872,9 @@ bool FBXImporter::writePhysics(const char* basename, const char* output_dir)
 		if (mesh.import_physics)
 		{
 			int vertex_size = getVertexSize(mesh);
-			int vertex_count = (i32)(mesh.vertex_data.getPos() / vertex_size);
+			int vertex_count = (i32)(mesh.vertex_data.size() / vertex_size);
 
-			const u8* verts = (const u8*)mesh.vertex_data.getData();
+			const u8* verts = mesh.vertex_data.data();
 
 			for (int i = 0; i < vertex_count; ++i)
 			{
@@ -1912,7 +1922,7 @@ void FBXImporter::writePrefab(const char* src, const ImportConfig& cfg)
 	engine.serialize(universe, blob);
 	engine.destroyUniverse(universe);
 
-	file.write(blob.getData(), blob.getPos());
+	file.write(blob.data(), blob.size());
 	file.close();
 }
 
@@ -1931,11 +1941,11 @@ void FBXImporter::writeSubmodels(const char* src, const ImportConfig& cfg)
 		writeMeshes(src, i, cfg);
 		writeGeometry(i);
 		const ofbx::Skin* skin = meshes[i].fbx->getGeometry()->getSkin();
-		if (!skin) {
-			write((int)0);
+		if (meshes[i].is_skinned) {
+			writeSkeleton(cfg);
 		}
 		else {
-			writeSkeleton(cfg);
+			write((i32)0);
 		}
 
 		// lods
@@ -1948,7 +1958,7 @@ void FBXImporter::writeSubmodels(const char* src, const ImportConfig& cfg)
 
 		StaticString<MAX_PATH_LENGTH> resource_locator(name, ".fbx:", src);
 
-		compiler.writeCompiledResource(resource_locator, Span((u8*)out_file.getData(), (i32)out_file.getPos()));
+		compiler.writeCompiledResource(resource_locator, Span(out_file.data(), (i32)out_file.size()));
 	}
 }
 
@@ -1978,7 +1988,7 @@ void FBXImporter::writeModel(const char* src, const ImportConfig& cfg)
 	writeSkeleton(cfg);
 	writeLODs(cfg);
 
-	compiler.writeCompiledResource(src, Span((u8*)out_file.getData(), (i32)out_file.getPos()));
+	compiler.writeCompiledResource(src, Span(out_file.data(), (i32)out_file.size()));
 }
 
 

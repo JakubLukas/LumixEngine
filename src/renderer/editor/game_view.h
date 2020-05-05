@@ -3,6 +3,7 @@
 
 #include "editor/studio_app.h"
 #include "engine/math.h"
+#include "engine/os.h"
 #include "renderer/gpu/gpu.h"
 
 
@@ -30,6 +31,7 @@ public:
 	bool isMouseCaptured() const { return m_is_mouse_captured; }
 	void captureMouse(bool capture);
 	void enableIngameCursor(bool enable);
+	void setCursor(OS::CursorType type);
 	void forceViewport(bool enable, int w, int h);
 	const char* getName() const override { return "game_view"; }
 	bool isOpen() const { return m_is_open; }
@@ -54,14 +56,15 @@ private:
 	WorldEditor& m_editor;
 	StudioApp& m_app;
 	float m_time_multiplier;
-	Vec2 m_pos;
-	Vec2 m_size;
+	Vec2 m_pos = Vec2(0);
+	Vec2 m_size = Vec2(0);
 	struct GUIInterface* m_gui_interface;
 	bool m_is_mouse_captured;
 	bool m_is_ingame_cursor;
 	bool m_paused;
 	bool m_is_fullscreen;
 	bool m_show_stats;
+	OS::CursorType m_cursor_type = OS::CursorType::DEFAULT;
 	struct
 	{
 		bool enabled = false;

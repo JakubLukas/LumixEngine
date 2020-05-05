@@ -57,15 +57,17 @@ struct AssetBrowserPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 struct PrefabSystemImpl final : PrefabSystem
 {
-	struct InstantiatePrefabCommand final : IEditorCommand
+	struct InstantiatePrefabsCommand final : IEditorCommand
 	{
-		InstantiatePrefabCommand(WorldEditor& editor)
+		InstantiatePrefabsCommand(WorldEditor& editor)
 			: editor(editor)
+			, transforms(editor.getAllocator())
+			, entities(editor.getAllocator())
 		{
 		}
 
 
-		~InstantiatePrefabCommand()
+		~InstantiatePrefabsCommand()
 		{
 			prefab->getResourceManager().unload(*prefab);
 		}
@@ -93,30 +95,29 @@ struct PrefabSystemImpl final : PrefabSystem
 
 		bool execute() override
 		{
-			entity = INVALID_ENTITY;
+			ASSERT(entities.empty());
 			if (prefab->isFailure()) return false;
 			
+			entities.reserve(transforms.size());
 			ASSERT(prefab->isReady());
 			auto& system = (PrefabSystemImpl&)editor.getPrefabSystem();
 
-			entity = system.doInstantiatePrefab(*prefab, position, rotation, scale);
-			if (!entity.isValid()) return false;
-
-			return true;
+			system.doInstantiatePrefabs(*prefab, transforms, Ref(entities));
+			return !entities.empty();
 		}
 
 
 		void undo() override
 		{
-			ASSERT(entity.isValid());
+			ASSERT(!entities.empty());
 
 			Universe& universe = *editor.getUniverse();
 
-			EntityRef e = (EntityRef)entity;
-			destroyEntityRecursive(universe.getFirstChild(e));
-			universe.destroyEntity(e);
-
-			entity = INVALID_ENTITY;
+			for (EntityRef e : entities) {
+				destroyEntityRecursive(universe.getFirstChild(e));
+				universe.destroyEntity(e);
+			}
+			entities.clear();
 		}
 
 
@@ -129,11 +130,9 @@ struct PrefabSystemImpl final : PrefabSystem
 		bool merge(IEditorCommand& command) override { return false; }
 
 		PrefabResource* prefab;
-		DVec3 position;
-		Quat rotation;
-		float scale;
+		Array<Transform> transforms;
 		WorldEditor& editor;
-		EntityPtr entity = INVALID_ENTITY;
+		Array<EntityRef> entities;
 	};
 
 public:
@@ -180,13 +179,13 @@ public:
 
 	void onEntityDestroyed(EntityRef entity)
 	{
+		m_roots.erase(entity);
+		
 		if (entity.index >= m_entity_to_prefab.size()) return;
-
 		const PrefabHandle prefab = m_entity_to_prefab[entity.index];
 		if (prefab == 0) return;
 
 		m_entity_to_prefab[entity.index] = 0;
-		m_roots.erase(entity);
 	}
 
 
@@ -220,6 +219,38 @@ public:
 			m_entity_to_prefab.push(0);
 		}
 	}
+	
+
+	void doInstantiatePrefabs(PrefabResource& prefab_res, const Array<Transform>& transforms, Ref<Array<EntityRef>> entities)
+	{
+		ASSERT(prefab_res.isReady());
+		if (!m_resources.find(prefab_res.getPath().getHash()).isValid())
+		{
+			m_resources.insert(prefab_res.getPath().getHash(), {prefab_res.content_hash, &prefab_res});
+			prefab_res.getResourceManager().load(prefab_res);
+		}
+		
+		Engine& engine = m_editor.getEngine();
+		EntityMap entity_map(m_editor.getAllocator());
+		const PrefabHandle prefab = prefab_res.getPath().getHash();
+		m_roots.reserve(m_roots.size() + transforms.size());
+		
+		for (const Transform& tr : transforms) {
+			entity_map.m_map.clear();
+			if (!engine.instantiatePrefab(*m_universe, prefab_res, tr.pos, tr.rot, tr.scale, Ref(entity_map))) {
+				logError("Editor") << "Failed to instantiate prefab " << prefab_res.getPath();
+				return;
+			}
+
+			for (const EntityPtr& e : entity_map.m_map) {
+				setPrefab((EntityRef)e, prefab);
+			}
+
+			const EntityRef root = (EntityRef)entity_map.m_map[0];
+			m_roots.insert(root, prefab);
+			entities->push(root);
+		}
+	}
 
 
 	EntityPtr doInstantiatePrefab(PrefabResource& prefab_res, const DVec3& pos, const Quat& rot, float scale)
@@ -247,17 +278,24 @@ public:
 		return root;
 	}
 
+	void instantiatePrefabs(struct PrefabResource& prefab, Span<struct Transform> transforms) override {
+		InstantiatePrefabsCommand* cmd = LUMIX_NEW(m_editor.getAllocator(), InstantiatePrefabsCommand)(m_editor);
+		cmd->transforms.resize(transforms.length());
+		memcpy(cmd->transforms.begin(), transforms.begin(), transforms.length() * sizeof(transforms[0]));
+		prefab.getResourceManager().load(prefab);
+		cmd->prefab = &prefab;
+		m_editor.executeCommand(cmd);
+	}
 
 	EntityPtr instantiatePrefab(PrefabResource& prefab, const DVec3& pos, const Quat& rot, float scale) override
 	{
-		InstantiatePrefabCommand* cmd = LUMIX_NEW(m_editor.getAllocator(), InstantiatePrefabCommand)(m_editor);
-		cmd->position = pos;
+		InstantiatePrefabsCommand* cmd = LUMIX_NEW(m_editor.getAllocator(), InstantiatePrefabsCommand)(m_editor);
+		cmd->transforms.push({pos, rot, scale});
 		prefab.getResourceManager().load(prefab);
 		cmd->prefab = &prefab;
-		cmd->rotation = rot;
-		cmd->scale = scale;
 		m_editor.executeCommand(cmd);
-		return cmd->entity;
+		if (cmd->entities.empty()) return INVALID_ENTITY;
+		return cmd->entities[0];
 	}
 
 
@@ -430,13 +468,30 @@ public:
 		universe.destroyEntity(e);
 	}
 
+	void breakPrefabRecursive(EntityRef e) {
+		m_entity_to_prefab[e.index] = 0;
+		const EntityPtr child = m_universe->getFirstChild(e);
+		if (child.isValid()) {
+			breakPrefabRecursive((EntityRef)child);
+		}
+		const EntityPtr sibling = m_universe->getNextSibling(e);
+		if (sibling.isValid()) {
+			breakPrefabRecursive((EntityRef)sibling);
+		}
+	}
 
-	void savePrefab(const Path& path) override
+	void breakPrefab(EntityRef e) override {
+		const EntityRef root = getPrefabRoot(e);
+		const EntityPtr child = m_universe->getFirstChild(root);
+		if (child.isValid()) {
+			breakPrefabRecursive((EntityRef)child);
+		}
+		m_entity_to_prefab[root.index] = 0;
+		m_roots.erase(root);
+	}
+
+	void savePrefab(EntityRef entity, const Path& path) override
 	{
-		auto& selected_entities = m_editor.getSelectedEntities();
-		if (selected_entities.size() != 1) return;
-
-		EntityRef entity = selected_entities[0];
 		if (getPrefab(entity) != 0) entity = getPrefabRoot(entity);
 
 		Engine& engine = m_editor.getEngine();
@@ -456,7 +511,7 @@ public:
 		engine.serialize(prefab_universe, blob);
 		engine.destroyUniverse(prefab_universe);
 
-		if (!file.write(blob.getData(), blob.getPos())) {
+		if (!file.write(blob.data(), blob.size())) {
 			logError("Editor") << "Failed to write " << path.c_str();
 			file.close();
 			return;
@@ -486,8 +541,9 @@ public:
 		else {
 			ResourceManagerHub& resource_manager = engine.getResourceManager();
 			prefab_res = resource_manager.load<PrefabResource>(path);
-			const u32 content_hash = crc32(blob.getData(), (u32)blob.getPos());
+			const u32 content_hash = crc32(blob.data(), (u32)blob.size());
 			m_resources.insert(path.getHash(), { content_hash, prefab_res});
+			m_roots.insert(entity, prefab);
 		}
 
 
@@ -590,9 +646,17 @@ public:
 	{
 		u32 count;
 		serializer.read(count);
-		m_entity_to_prefab.resize(count);
-		if (count > 0) {
-			serializer.read(m_entity_to_prefab.begin(), m_entity_to_prefab.byte_size());
+		m_entity_to_prefab.reserve(count);
+		for (u32 i = 0; i < count; ++i) {
+			const EntityPtr e = entity_map.get(EntityPtr{(i32)i});
+			PrefabHandle prefab;
+			serializer.read(prefab);
+
+			if (!e.isValid()) continue;
+			while (e.index >= m_entity_to_prefab.size()) {
+				m_entity_to_prefab.push(0);
+			}
+			m_entity_to_prefab[e.index] = prefab;
 		}
 
 		serializer.read(count);
@@ -614,6 +678,7 @@ public:
 			EntityRef e;
 			serializer.read(e);
 			serializer.read(p);
+			e = entity_map.get(e);
 			m_roots.insert(e, p);
 		}
 	}

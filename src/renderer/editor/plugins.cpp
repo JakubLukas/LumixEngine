@@ -29,8 +29,9 @@
 #include "fbx_importer.h"
 #include "game_view.h"
 #include "renderer/culling_system.h"
-#include "renderer/gpu/gpu.h"
+#include "renderer/editor/composite_texture.h"
 #include "renderer/font.h"
+#include "renderer/gpu/gpu.h"
 #include "renderer/material.h"
 #include "renderer/model.h"
 #include "renderer/pose.h"
@@ -355,7 +356,7 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 	}
 
 	void onGUIMultiple(Span<Resource*> resources) {
-		if (ImGui::Button("Open in external editor")) {
+		if (ImGui::Button(ICON_FA_EXTERNAL_LINK_ALT "Open externally")) {
 			for (Resource* res : resources) {
 				m_app.getAssetBrowser().openInExternalEditor(res);
 			}
@@ -368,7 +369,7 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 			}
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Save")) {
+		if (ImGui::Button(ICON_FA_SAVE "Save")) {
 			for (Resource* res : resources) {
 				saveMaterial(static_cast<Material*>(res));
 			}
@@ -391,14 +392,12 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 			copyString(buf, "<different values>");
 		}
 
-		if (m_app.getAssetBrowser().resourceInput("Shader", "shader", Span(buf), Shader::TYPE)) {
+		ImGuiEx::Label("Shader");
+		if (m_app.getAssetBrowser().resourceInput("shader", Span(buf), Shader::TYPE)) {
 			for (Resource* res : resources) {
 				static_cast<Material*>(res)->setShader(Path(buf));
 			}
 		}
-
-		if (!same_shader) return;
-
 	}
 
 	void onGUI(Span<Resource*> resources) override {
@@ -408,10 +407,10 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		}
 
 		Material* material = static_cast<Material*>(resources[0]);
-		if (ImGui::Button("Open in external editor")) m_app.getAssetBrowser().openInExternalEditor(material);
+		if (ImGui::Button(ICON_FA_EXTERNAL_LINK_ALT "Open externally")) m_app.getAssetBrowser().openInExternalEditor(material);
 
-		if (ImGui::Button("Save")) saveMaterial(material);
 		ImGui::SameLine();
+		if (ImGui::Button(ICON_FA_SAVE "Save")) saveMaterial(material);
 
 		auto* plugin = m_app.getEngine().getPluginManager().getPlugin("renderer");
 		auto* renderer = static_cast<Renderer*>(plugin);
@@ -419,17 +418,20 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		int alpha_cutout_define = renderer->getShaderDefineIdx("ALPHA_CUTOUT");
 
 		bool b = material->isBackfaceCulling();
-		if (ImGui::Checkbox("Backface culling", &b)) material->enableBackfaceCulling(b);
+		ImGuiEx::Label("Backface culling");
+		if (ImGui::Checkbox("##bfcul", &b)) material->enableBackfaceCulling(b);
 
 		if (material->getShader() 
 			&& material->getShader()->isReady() 
 			&& material->getShader()->hasDefine(alpha_cutout_define))
 		{
 			b = material->isDefined(alpha_cutout_define);
-			if (ImGui::Checkbox("Is alpha cutout", &b)) material->setDefine(alpha_cutout_define, b);
+			ImGuiEx::Label("Is alpha cutout");
+			if (ImGui::Checkbox("##acut", &b)) material->setDefine(alpha_cutout_define, b);
 			if (b) {
 				float tmp = material->getAlphaRef();
-				if (ImGui::DragFloat("Alpha reference value", &tmp, 0.01f, 0.0f, 1.0f)) {
+				ImGuiEx::Label("Alpha reference value");
+				if (ImGui::DragFloat("##acutref", &tmp, 0.01f, 0.0f, 1.0f)) {
 					material->setAlphaRef(tmp);
 				}
 			}
@@ -439,28 +441,32 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		if (shader) {
 			if (!shader->isIgnored(Shader::COLOR)) {
 				Vec4 color = material->getColor();
-				if (ImGui::ColorEdit4("Color", &color.x)) {
+				ImGuiEx::Label("Color");
+				if (ImGui::ColorEdit4("##col", &color.x)) {
 					material->setColor(color);
 				}
 			}
 
 			if (!shader->isIgnored(Shader::ROUGHNESS)) {
 				float roughness = material->getRoughness();
-				if (ImGui::DragFloat("Roughness", &roughness, 0.01f, 0.0f, 1.0f)) {
+				ImGuiEx::Label("Roughness");
+				if (ImGui::DragFloat("##rgh", &roughness, 0.01f, 0.0f, 1.0f)) {
 					material->setRoughness(roughness);
 				}
 			}
 
 			if (!shader->isIgnored(Shader::METALLIC)) {
 				float metallic = material->getMetallic();
-				if (ImGui::DragFloat("Metallic", &metallic, 0.01f, 0.0f, 1.0f)) {
+				ImGuiEx::Label("Metallic");
+				if (ImGui::DragFloat("##met", &metallic, 0.01f, 0.0f, 1.0f)) {
 					material->setMetallic(metallic);
 				}
 			}
 			
 			if (!shader->isIgnored(Shader::EMISSION)) {
 				float emission = material->getEmission();
-				if (ImGui::DragFloat("Emission", &emission, 0.01f, 0.0f)) {
+				ImGuiEx::Label("Emission");
+				if (ImGui::DragFloat("##emis", &emission, 0.01f, 0.0f)) {
 					material->setEmission(emission);
 				}
 			}
@@ -468,12 +474,14 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 		char buf[MAX_PATH_LENGTH];
 		copyString(buf, material->getShader() ? material->getShader()->getPath().c_str() : "");
-		if (m_app.getAssetBrowser().resourceInput("Shader", "shader", Span(buf), Shader::TYPE)) {
+		ImGuiEx::Label("Shader");
+		if (m_app.getAssetBrowser().resourceInput("shader", Span(buf), Shader::TYPE)) {
 			material->setShader(Path(buf));
 		}
 
 		const char* current_layer_name = renderer->getLayerName(material->getLayer());
-		if (ImGui::BeginCombo("Layer", current_layer_name)) {
+		ImGuiEx::Label("Layer");
+		if (ImGui::BeginCombo("##layer", current_layer_name)) {
 			for (u8 i = 0, c = renderer->getLayersCount(); i < c; ++i) {
 				const char* name = renderer->getLayerName(i);
 				if (ImGui::Selectable(name)) {
@@ -497,8 +505,9 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 				"");
 			ImGui::PopStyleColor(4);
 			ImGui::SameLine();
-			if (m_app.getAssetBrowser().resourceInput(
-					slot.name, StaticString<30>("", (u64)&slot), Span(buf), Texture::TYPE))
+
+			ImGuiEx::Label(slot.name);
+			if (m_app.getAssetBrowser().resourceInput(StaticString<30>("", (u64)&slot), Span(buf), Texture::TYPE))
 			{
 				material->setTexturePath(i, Path(buf));
 			}
@@ -533,27 +542,32 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 				switch (shader_uniform.type) {
 					case Shader::Uniform::FLOAT:
-						if (ImGui::DragFloat(shader_uniform.name, &uniform->float_value)) {
+						ImGuiEx::Label(shader_uniform.name);
+						if (ImGui::DragFloat(StaticString<256>("##", shader_uniform.name), &uniform->float_value)) {
 							material->updateRenderData(false);
 						}
 						break;
 					case Shader::Uniform::VEC3:
-						if (ImGui::DragFloat3(shader_uniform.name, uniform->vec3)) {
+						ImGuiEx::Label(shader_uniform.name);
+						if (ImGui::DragFloat3(StaticString<256>("##", shader_uniform.name), uniform->vec3)) {
 							material->updateRenderData(false);
 						}
 						break;
 					case Shader::Uniform::VEC4:
-						if (ImGui::DragFloat4(shader_uniform.name, uniform->vec4)) {
+						ImGuiEx::Label(shader_uniform.name);
+						if (ImGui::DragFloat4(StaticString<256>("##", shader_uniform.name), uniform->vec4)) {
 							material->updateRenderData(false);
 						}
 						break;
 					case Shader::Uniform::VEC2:
-						if (ImGui::DragFloat2(shader_uniform.name, uniform->vec2)) {
+						ImGuiEx::Label(shader_uniform.name);
+						if (ImGui::DragFloat2(StaticString<256>("##", shader_uniform.name), uniform->vec2)) {
 							material->updateRenderData(false);
 						}
 						break;
 					case Shader::Uniform::COLOR:
-						if (ImGui::ColorEdit3(shader_uniform.name, uniform->vec3)) {
+						ImGuiEx::Label(shader_uniform.name);
+						if (ImGui::ColorEdit3(StaticString<256>("##", shader_uniform.name), uniform->vec3)) {
 							material->updateRenderData(false);
 						}
 						break;
@@ -595,6 +609,753 @@ struct MaterialPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 	StudioApp& m_app;
 };
 
+
+struct TexturePlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
+{
+	struct Meta
+	{
+		enum WrapMode : u32 {
+			REPEAT,
+			CLAMP
+		};
+		enum Filter : u32 {
+			LINEAR,
+			POINT
+		};
+		bool srgb = false;
+		bool is_normalmap = false;
+		float scale_coverage = -1;
+		bool convert_to_raw = false;
+		bool compress = false;
+		WrapMode wrap_mode_u = WrapMode::REPEAT;
+		WrapMode wrap_mode_v = WrapMode::REPEAT;
+		WrapMode wrap_mode_w = WrapMode::REPEAT;
+		Filter filter = Filter::LINEAR;
+	};
+
+	explicit TexturePlugin(StudioApp& app)
+		: m_app(app)
+		, m_composite(app.getAllocator())
+	{
+		app.getAssetCompiler().registerExtension("png", Texture::TYPE);
+		app.getAssetCompiler().registerExtension("jpg", Texture::TYPE);
+		app.getAssetCompiler().registerExtension("tga", Texture::TYPE);
+		app.getAssetCompiler().registerExtension("dds", Texture::TYPE);
+		app.getAssetCompiler().registerExtension("raw", Texture::TYPE);
+		app.getAssetCompiler().registerExtension("ltc", Texture::TYPE);
+	}
+
+
+	~TexturePlugin() {
+		PluginManager& plugin_manager = m_app.getEngine().getPluginManager();
+		auto* renderer = (Renderer*)plugin_manager.getPlugin("renderer");
+		if(m_texture_view.isValid()) {
+			renderer->destroy(m_texture_view);
+		}
+	}
+
+	const char* getDefaultExtension() const override { return "ltc"; }
+	const char* getFileDialogFilter() const override { return "Composite texture\0*.ltc\0"; }
+	const char* getFileDialogExtensions() const override { return "ltc"; }
+	bool canCreateResource() const override { return true; }
+	bool createResource(const char* path) override { 
+		OS::OutputFile file;
+		if (!file.open(path)) {
+			logError("Renderer") << "Failed to create " << path;
+			return false;
+		}
+
+		file.close();
+		return true;
+	}
+
+	struct TextureTileJob
+	{
+		TextureTileJob(FileSystem& filesystem, IAllocator& allocator) 
+			: m_allocator(allocator) 
+			, m_filesystem(filesystem)
+		{}
+
+		void execute() {
+			IAllocator& allocator = m_allocator;
+
+			u32 hash = crc32(m_in_path);
+			StaticString<MAX_PATH_LENGTH> out_path(".lumix/asset_tiles/", hash, ".dds");
+			OutputMemoryStream resized_data(allocator);
+			resized_data.resize(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE * 4);
+			if (Path::hasExtension(m_in_path, "dds")) {
+				OS::InputFile file;
+				if (!file.open(m_in_path)) {
+					m_filesystem.copyFile("models/editor/tile_texture.dds", out_path);
+					logError("Editor") << "Failed to load " << m_in_path;
+					return;
+				}
+				Array<u8> data(allocator);
+				data.resize((int)file.size());
+				file.read(&data[0], data.size());
+				file.close();
+
+				nvtt::Surface surface;
+				if (!surface.load(m_in_path, data.begin(), data.byte_size())) {
+					logError("Editor") << "Failed to load " << m_in_path;
+					m_filesystem.copyFile("models/editor/tile_texture.dds", out_path);
+					return;
+				}
+
+				OutputMemoryStream decompressed(allocator);
+				const int w = surface.width();
+				const int h = surface.height();
+				decompressed.resize(4 * w * h);
+				for (int c = 0; c < 4; ++c) {
+					const float* data = surface.channel(c);
+					for (int j = 0; j < h; ++j) {
+						for (int i = 0; i < w; ++i) {
+							const u8 p = u8(data[j * w + i] * 255.f + 0.5f);
+							decompressed.getMutableData()[(j * w + i) * 4 + c] = p;
+						}
+					}
+				}
+
+				stbir_resize_uint8(decompressed.data(),
+					w,
+					h,
+					0,
+					resized_data.getMutableData(),
+					AssetBrowser::TILE_SIZE,
+					AssetBrowser::TILE_SIZE,
+					0,
+					4);
+			}
+			else
+			{
+				int image_comp;
+				int w, h;
+				auto data = stbi_load(m_in_path, &w, &h, &image_comp, 4);
+				if (!data)
+				{
+					logError("Editor") << "Failed to load " << m_in_path;
+					m_filesystem.copyFile("models/editor/tile_texture.dds", out_path);
+					return;
+				}
+				stbir_resize_uint8(data,
+					w,
+					h,
+					0,
+					resized_data.getMutableData(),
+					AssetBrowser::TILE_SIZE,
+					AssetBrowser::TILE_SIZE,
+					0,
+					4);
+				for (u32 i = 0; i < u32(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE); ++i) {
+					swap(resized_data.getMutableData()[i * 4 + 0], resized_data.getMutableData()[i * 4 + 2]);
+				}
+				stbi_image_free(data);
+			}
+
+			if (!saveAsDDS(m_out_path, resized_data.data(), AssetBrowser::TILE_SIZE, AssetBrowser::TILE_SIZE)) {
+				logError("Editor") << "Failed to save " << m_out_path;
+			}
+		}
+
+		static void execute(void* data) {
+			PROFILE_FUNCTION();
+			TextureTileJob* that = (TextureTileJob*)data;
+			that->execute();
+			LUMIX_DELETE(that->m_allocator, that);
+		}
+
+		IAllocator& m_allocator;
+		FileSystem& m_filesystem;
+		StaticString<MAX_PATH_LENGTH> m_in_path; 
+		StaticString<MAX_PATH_LENGTH> m_out_path; 
+	};
+
+
+	bool createTile(const char* in_path, const char* out_path, ResourceType type) override
+	{
+		if (type == Texture::TYPE && !Path::hasExtension(in_path, "ltc") && !Path::hasExtension(in_path, "raw")) {
+			IAllocator& allocator = m_app.getAllocator();
+			FileSystem& fs = m_app.getEngine().getFileSystem();
+			auto* job = LUMIX_NEW(allocator, TextureTileJob)(fs, allocator);
+			job->m_in_path = fs.getBasePath();
+			job->m_in_path << in_path;
+			job->m_out_path = fs.getBasePath();
+			job->m_out_path << out_path;
+			JobSystem::SignalHandle signal = JobSystem::INVALID_HANDLE;
+			JobSystem::runEx(job, &TextureTileJob::execute, &signal, m_tile_signal, JobSystem::getWorkersCount() - 1);
+			m_tile_signal = signal;
+			return true;
+		}
+		return false;
+	}
+
+	bool createComposite(const OutputMemoryStream& src_data, OutputMemoryStream& dst, const Meta& meta, const char* src_path) {
+		IAllocator& allocator = m_app.getAllocator();
+		CompositeTexture tc(allocator);
+		if (!tc.init(Span(src_data.data(), (u32)src_data.size()), src_path)) return false;
+		struct Src {
+			stbi_uc* data;
+			int w, h;
+			Path path;
+		};
+
+		HashMap<u32, Src> sources(allocator);
+		FileSystem& fs = m_app.getEngine().getFileSystem();
+		OutputMemoryStream tmp_src(allocator);
+		int w = -1, h = -1;
+
+		auto prepare_source =[&](const CompositeTexture::ChannelSource& ch){
+			if (!ch.path.isValid()) return false;
+			if (sources.find(ch.path.getHash()).isValid()) return true;
+
+			tmp_src.clear();
+			if (!fs.getContentSync(ch.path, Ref(tmp_src))) {
+				return false;
+			}
+
+			int cmp;
+			stbi_uc* data = stbi_load_from_memory(tmp_src.data(), (i32)tmp_src.size(), &w, &h, &cmp, 4);
+			if (!data) {
+				return false;
+			}
+
+			sources.insert(ch.path.getHash(), {data, w, h, ch.path});
+			return true;
+		};
+
+		bool success = true;
+		for (CompositeTexture::Layer& layer : tc.layers) {
+			success = success && prepare_source(layer.red);
+			success = success && prepare_source(layer.green);
+			success = success && prepare_source(layer.blue);
+			success = success && prepare_source(layer.alpha);
+		}
+
+		if (!success) return false;
+
+		if (tc.layers.empty()) {
+			return true;
+		}
+
+		if (sources.size() == 0) return false;
+		const Src first_src = sources.begin().value(); 
+		for (auto iter = sources.begin(); iter.isValid(); ++iter) {
+			if (iter.value().w != first_src.w || iter.value().h != first_src.h) {
+				logError("Renderer") << src_path << ": " << first_src.path << "(" << first_src.w << "x" << first_src.h << ") does not match "
+					<< iter.value().path << "(" << iter.value().w << "x" << iter.value().h << ")";
+				return false;
+			}
+		}
+
+		nvtt::InputOptions input;
+		input.setMipmapGeneration(true);
+		input.setAlphaCoverageMipScale(meta.scale_coverage, 4);
+		input.setAlphaMode(nvtt::AlphaMode_Transparency);
+		input.setNormalMap(meta.is_normalmap);
+		input.setTextureLayout(nvtt::TextureType_Array, w, h, 1, tc.layers.size());
+		
+		OutputMemoryStream out_data(allocator);
+		out_data.resize(w * h * 4);
+		for (CompositeTexture::Layer& layer : tc.layers) {
+			const u32 idx = u32(&layer - tc.layers.begin());
+			for (u32 ch = 0; ch < 4; ++ch) {
+				const Path& p = layer.getChannel(ch).path;
+				if (!p.isValid()) continue;
+				stbi_uc* from = sources[p.getHash()].data;
+				if (!from) continue;
+				u32 from_ch = layer.getChannel(ch).src_channel;
+				if (from_ch == 0) from_ch = 2;
+				else if (from_ch == 2) from_ch = 0;
+
+				for (u32 j = 0; j < (u32)h; ++j) {
+					for (u32 i = 0; i < (u32)w; ++i) {
+						out_data.getMutableData()[(j * w + i) * 4 + ch] = from[(i + j * w) * 4 + from_ch];
+					}
+				}
+			}
+
+			input.setMipmapData(out_data.data(), w, h, 1, idx);
+		}
+
+		for (const Src& i : sources) {
+			free(i.data);
+		}
+
+		nvtt::OutputOptions output;
+		output.setSrgbFlag(meta.srgb);
+		output.setContainer(nvtt::Container_DDS10);
+		struct : nvtt::OutputHandler {
+			bool writeData(const void * data, int size) override { return dst->write(data, size); }
+			void beginImage(int size, int width, int height, int depth, int face, int miplevel) override {}
+			void endImage() override {}
+
+			OutputMemoryStream* dst;
+		} output_handler;
+		output_handler.dst = &dst;
+		output.setOutputHandler(&output_handler);
+
+		nvtt::CompressionOptions compression;
+		// TODO format
+		compression.setFormat(nvtt::Format_BC3);
+		compression.setQuality(nvtt::Quality_Fastest);
+
+		dst.write("dds", 3);
+		u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
+		flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
+		flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
+		flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
+		flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
+		dst.write(&flags, sizeof(flags));
+
+		nvtt::Context context;
+		if (!context.process(input, compression, output)) {
+			return false;
+		}
+		return true;
+	}
+
+	bool compileImage(const Path& path, const OutputMemoryStream& src_data, OutputMemoryStream& dst, const Meta& meta)
+	{
+		PROFILE_FUNCTION();
+		int w, h, comps;
+		const bool is_16_bit = stbi_is_16_bit_from_memory(src_data.data(), (i32)src_data.size());
+		if (is_16_bit) {
+			logError("Renderer") << path << ": 16bit images not yet supported.";
+		}
+
+		stbi_uc* data = stbi_load_from_memory(src_data.data(), (i32)src_data.size(), &w, &h, &comps, 4);
+		if (!data) return false;
+
+		if(meta.convert_to_raw) {
+			dst.write("raw", 3);
+			u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
+			flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
+			flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
+			flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
+			flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
+			dst.write(&flags, sizeof(flags));
+			for (int j = 0; j < h; ++j) {
+				for (int i = 0; i < w; ++i) {
+					const u16 tmp = (u16)data[(i + j * w) * 4] * 256;
+					dst.write(tmp);
+				}
+			}
+			return true;
+		}
+
+		for (u32 i = 0; i < u32(w * h); ++i) {
+			swap(data[i * 4 + 0], data[i * 4 + 2]);
+		}
+
+		dst.write("dds", 3);
+		u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
+		flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
+		flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
+		flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
+		flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
+		dst.write(&flags, sizeof(flags));
+
+		nvtt::Context context;
+		
+		const bool has_alpha = comps == 4;
+		nvtt::InputOptions input;
+		input.setMipmapGeneration(true);
+		input.setAlphaCoverageMipScale(meta.scale_coverage, comps == 4 ? 3 : 0);
+		input.setAlphaMode(has_alpha ? nvtt::AlphaMode_Transparency : nvtt::AlphaMode_None);
+		input.setNormalMap(meta.is_normalmap);
+		input.setTextureLayout(nvtt::TextureType_2D, w, h);
+		input.setMipmapData(data, w, h);
+		stbi_image_free(data);
+		
+		nvtt::OutputOptions output;
+		output.setSrgbFlag(meta.srgb);
+		struct : nvtt::OutputHandler {
+			bool writeData(const void * data, int size) override { return dst->write(data, size); }
+			void beginImage(int size, int width, int height, int depth, int face, int miplevel) override {}
+			void endImage() override {}
+
+			OutputMemoryStream* dst;
+		} output_handler;
+		output_handler.dst = &dst;
+		output.setOutputHandler(&output_handler);
+
+		nvtt::CompressionOptions compression;
+		compression.setFormat(meta.is_normalmap ? nvtt::Format_DXT5n : (has_alpha ? nvtt::Format_DXT5 : nvtt::Format_DXT1));
+		compression.setQuality(nvtt::Quality_Normal);
+
+		if (!context.process(input, compression, output)) {
+			return false;
+		}
+		return true;
+	}
+
+
+	Meta getMeta(const Path& path) const
+	{
+		Meta meta;
+		m_app.getAssetCompiler().getMeta(path, [&path, &meta](lua_State* L){
+			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "srgb", &meta.srgb);
+			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "compress", &meta.compress);
+			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "convert_to_raw", &meta.convert_to_raw);
+			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "mip_scale_coverage", &meta.scale_coverage);
+			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "normalmap", &meta.is_normalmap);
+			char tmp[32];
+			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "filter", Span(tmp))) {
+				if (equalIStrings(tmp, "point")) {
+					meta.filter = Meta::Filter::POINT;
+				}
+				else {
+					meta.filter = Meta::Filter::LINEAR;
+				}
+			}
+			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "wrap_mode_u", Span(tmp))) {
+				meta.wrap_mode_u = equalIStrings(tmp, "repeat") ? Meta::WrapMode::REPEAT : Meta::WrapMode::CLAMP;
+			}
+			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "wrap_mode_v", Span(tmp))) {
+				meta.wrap_mode_v = equalIStrings(tmp, "repeat") ? Meta::WrapMode::REPEAT : Meta::WrapMode::CLAMP;
+			}
+			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "wrap_mode_w", Span(tmp))) {
+				meta.wrap_mode_w = equalIStrings(tmp, "repeat") ? Meta::WrapMode::REPEAT : Meta::WrapMode::CLAMP;
+			}
+		});
+		return meta;
+	}
+
+	bool compile(const Path& src) override
+	{
+		char ext[4] = {};
+		Path::getExtension(Span(ext), Span(src.c_str(), src.length()));
+
+		FileSystem& fs = m_app.getEngine().getFileSystem();
+		OutputMemoryStream src_data(m_app.getAllocator());
+		if (!fs.getContentSync(src, Ref(src_data))) return false;
+		
+		OutputMemoryStream out(m_app.getAllocator());
+		Meta meta = getMeta(src);
+		if (equalStrings(ext, "dds") || equalStrings(ext, "raw") || (equalStrings(ext, "tga") && !meta.compress)) {
+			if (meta.scale_coverage < 0 || !equalStrings(ext, "tga")) {
+				out.write(ext, sizeof(ext) - 1);
+				u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
+				flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
+				flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
+				flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
+				flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
+				out.write(flags);
+				out.write(src_data.data(), src_data.size());
+			}
+			else {
+				compileImage(src, src_data, out, meta);
+			}
+		}
+		else if(equalStrings(ext, "jpg") || equalStrings(ext, "png") || (equalStrings(ext, "tga") && meta.compress)) {
+			compileImage(src, src_data, out, meta);
+		}
+		else if (equalStrings(ext, "ltc")) {
+			if (!createComposite(src_data, out, meta, src.c_str())) {
+				return false;
+			}
+		}
+		else {
+			ASSERT(false);
+		}
+
+		return m_app.getAssetCompiler().writeCompiledResource(src.c_str(), Span(out.data(), (i32)out.size()));
+	}
+
+	const char* toString(Meta::Filter filter) {
+		switch (filter) {
+			case Meta::Filter::POINT: return "point";
+			case Meta::Filter::LINEAR: return "linear";
+			default: ASSERT(false); return "linear";
+		}
+	}
+
+	const char* toString(Meta::WrapMode wrap) {
+		switch (wrap) {
+			case Meta::WrapMode::CLAMP: return "clamp";
+			case Meta::WrapMode::REPEAT: return "repeat";
+			default: ASSERT(false); return "repeat";
+		}
+	}
+
+	void compositeGUI(Texture& texture) {
+		FileSystem& fs = m_app.getEngine().getFileSystem();
+		if (m_composite_tag != &texture) {
+			m_composite_tag = &texture;
+			IAllocator& allocator = m_app.getAllocator();
+			OutputMemoryStream content(allocator);
+			fs.getContentSync(texture.getPath(), Ref(content));
+			m_composite.init(Span(content.data(), (u32)content.size()), texture.getPath().c_str());
+		}
+
+		if (ImGui::CollapsingHeader("Edit")) {
+			static bool show_channels = false;
+			bool same_channels = true;
+			for (CompositeTexture::Layer& layer : m_composite.layers) {
+				if (layer.red.path != layer.green.path
+					|| layer.red.path != layer.blue.path
+					|| layer.red.path != layer.alpha.path) 
+				{
+					same_channels = false;
+					break;
+				}
+				if (layer.red.src_channel != 0
+					|| layer.green.src_channel != 1
+					|| layer.blue.src_channel != 2
+					|| layer.alpha.src_channel != 3)
+				{
+					same_channels = false;
+					break;
+				}
+			}
+
+			if (same_channels) {
+				ImGui::Checkbox("Show single channels", &show_channels);
+			}
+			else {
+				show_channels = true;
+			}
+			for (CompositeTexture::Layer& layer : m_composite.layers) {
+				const u32 idx = u32(&layer - m_composite.layers.begin());
+				if (ImGui::TreeNodeEx(&layer, 0, "%d", idx)) {
+					if (ImGui::Button("Remove")) {
+						m_composite.layers.erase(idx);
+						ImGui::TreePop();
+						break;
+					}
+
+					char tmp[MAX_PATH_LENGTH];
+					
+					if (show_channels) {
+						copyString(Span(tmp), layer.red.path.c_str());
+						ImGuiEx::Label("Red");
+						if (m_app.getAssetBrowser().resourceInput("r", Span(tmp), Texture::TYPE)) {
+							layer.red.path = tmp;
+						}
+						ImGuiEx::Label("Red source channel");
+						ImGui::Combo("##rsrcch", (int*)&layer.red.src_channel, "Red\0Green\0Blue\0Alpha\0");
+
+						copyString(Span(tmp), layer.green.path.c_str());
+						ImGuiEx::Label("Green");
+						if (m_app.getAssetBrowser().resourceInput("g", Span(tmp), Texture::TYPE)) {
+							layer.green.path = tmp;
+						}
+						ImGuiEx::Label("Green source channel");
+						ImGui::Combo("##gsrcch", (int*)&layer.green.src_channel, "Red\0Green\0Blue\0Alpha\0");
+
+						copyString(Span(tmp), layer.blue.path.c_str());
+						ImGuiEx::Label("Blue");
+						if (m_app.getAssetBrowser().resourceInput("b", Span(tmp), Texture::TYPE)) {
+							layer.blue.path = tmp;
+						}
+						
+						ImGuiEx::Label("Blue source channel");
+						ImGui::Combo("##bsrcch", (int*)&layer.blue.src_channel, "Red\0Green\0Blue\0Alpha\0");
+				
+						copyString(Span(tmp), layer.alpha.path.c_str());
+						ImGuiEx::Label("Alpha");
+						if (m_app.getAssetBrowser().resourceInput("a", Span(tmp), Texture::TYPE)) {
+							layer.alpha.path = tmp;
+						}
+						ImGuiEx::Label("Alpha source channel");
+						ImGui::Combo("##asrch", (int*)&layer.alpha.src_channel, "Red\0Green\0Blue\0Alpha\0");
+					}
+					else {
+						copyString(Span(tmp), layer.red.path.c_str());
+						ImGuiEx::Label("Source");
+						if (m_app.getAssetBrowser().resourceInput("rgba", Span(tmp), Texture::TYPE)) {
+							layer.red.path = tmp;
+							layer.green.path = tmp;
+							layer.blue.path = tmp;
+							layer.alpha.path = tmp;
+							layer.red.src_channel = 0;
+							layer.green.src_channel = 1;
+							layer.blue.src_channel = 2;
+							layer.alpha.src_channel = 3;
+						}
+					}
+
+					ImGui::TreePop();
+				}
+			}
+			if (ImGui::Button("Add layer")) {
+				m_composite.layers.emplace();
+			}
+			if (ImGui::Button(ICON_FA_SAVE "Save")) {
+				if (!m_composite.save(fs, texture.getPath())) {
+					logError("Renderer") << "Failed to save " << texture.getPath();
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(ICON_FA_EXTERNAL_LINK_ALT "Open externally")) {
+				m_app.getAssetBrowser().openInExternalEditor(texture.getPath().c_str());
+			}
+		}
+	}
+
+	void onGUI(Span<Resource*> resources) override
+	{
+		if(resources.length() > 1) return;
+
+		auto* texture = static_cast<Texture*>(resources[0]);
+
+		ImGuiEx::Label("Size");
+		ImGui::Text("%dx%d", texture->width, texture->height);
+		ImGuiEx::Label("Mips");
+		ImGui::Text("%d", texture->mips);
+		const char* format = "unknown";
+		switch(texture->format) {
+			case gpu::TextureFormat::R8: format = "R8"; break;
+			case gpu::TextureFormat::RGBA8: format = "RGBA8"; break;
+			case gpu::TextureFormat::RGBA16: format = "RGBA16"; break;
+			case gpu::TextureFormat::RGBA16F: format = "RGBA16F"; break;
+			case gpu::TextureFormat::RGBA32F: format = "RGBA32F"; break;
+			case gpu::TextureFormat::R16F: format = "R16F"; break;
+			case gpu::TextureFormat::R16: format = "R16"; break;
+			case gpu::TextureFormat::R32F: format = "R32F"; break;
+			case gpu::TextureFormat::SRGB: format = "SRGB"; break;
+			case gpu::TextureFormat::SRGBA: format = "SRGBA"; break;
+			default: ASSERT(false); break;
+		}
+		ImGuiEx::Label("Format");
+		ImGui::TextUnformatted(format);
+		if (texture->handle.isValid()) {
+			ImVec2 texture_size(200, 200);
+			if (texture->width > texture->height) {
+				texture_size.y = texture_size.x * texture->height / texture->width;
+			}
+			else {
+				texture_size.x = texture_size.y * texture->width / texture->height;
+			}
+
+			if (texture != m_texture) {
+				m_texture = texture;
+				PluginManager& plugin_manager = m_app.getEngine().getPluginManager();
+				auto* renderer = (Renderer*)plugin_manager.getPlugin("renderer");
+				renderer->runInRenderThread(this, [](Renderer& r, void* ptr){
+					TexturePlugin* p = (TexturePlugin*)ptr;
+					if (!p->m_texture_view.isValid()) {
+						p->m_texture_view = gpu::allocTextureHandle();
+					}
+					gpu::createTextureView(p->m_texture_view, p->m_texture->handle);
+				});
+			}
+
+			ImGui::Image((void*)(uintptr_t)m_texture_view.value, texture_size);
+
+			if (ImGui::Button("Open")) m_app.getAssetBrowser().openInExternalEditor(texture);
+		}
+
+		if (Path::hasExtension(texture->getPath().c_str(), "ltc")) compositeGUI(*texture);
+		if (ImGui::CollapsingHeader("Import")) {
+			AssetCompiler& compiler = m_app.getAssetCompiler();
+			
+			if(texture->getPath().getHash() != m_meta_res) {
+				m_meta = getMeta(texture->getPath());
+				m_meta_res = texture->getPath().getHash();
+			}
+			
+			ImGuiEx::Label("SRGB");
+			ImGui::Checkbox("##srgb", &m_meta.srgb);
+			
+			if (Path::hasExtension(texture->getPath().c_str(), "tga")) {
+				ImGuiEx::Label("Compress");
+				ImGui::Checkbox("##cmprs", &m_meta.compress);
+			}
+			
+			ImGuiEx::Label("Convert to RAW");
+			ImGui::Checkbox("##cvt2raw", &m_meta.convert_to_raw);
+			bool scale_coverage = m_meta.scale_coverage >= 0;
+			ImGuiEx::Label("Mipmap scale coverage");
+			if (ImGui::Checkbox("##mmapsccov", &scale_coverage)) {
+				m_meta.scale_coverage *= -1;
+			}
+			if (m_meta.scale_coverage >= 0) {
+				ImGuiEx::Label("Coverage alpha ref");
+				ImGui::SliderFloat("##covaref", &m_meta.scale_coverage, 0, 1);
+			}
+			ImGuiEx::Label("Is normalmap");
+			ImGui::Checkbox("##nrmmap", &m_meta.is_normalmap);
+			ImGuiEx::Label("U Wrap mode");
+			ImGui::Combo("##uwrp", (int*)&m_meta.wrap_mode_u, "Repeat\0Clamp\0");
+			ImGuiEx::Label("V Wrap mode");
+			ImGui::Combo("##vwrp", (int*)&m_meta.wrap_mode_v, "Repeat\0Clamp\0");
+			ImGuiEx::Label("W Wrap mode");
+			ImGui::Combo("##wwrp", (int*)&m_meta.wrap_mode_w, "Repeat\0Clamp\0");
+			ImGuiEx::Label("Filter");
+			ImGui::Combo("Filter", (int*)&m_meta.filter, "Linear\0Point\0");
+
+			if (ImGui::Button(ICON_FA_CHECK "Apply")) {
+				const StaticString<512> src("srgb = ", m_meta.srgb ? "true" : "false"
+					, "\ncompress = ", m_meta.compress ? "true" : "false"
+					, "\nconvert_to_raw = ", m_meta.convert_to_raw ? "true" : "false"
+					, "\nmip_scale_coverage = ", m_meta.scale_coverage
+					, "\nnormalmap = ", m_meta.is_normalmap ? "true" : "false"
+					, "\nwrap_mode_u = \"", toString(m_meta.wrap_mode_u), "\""
+					, "\nwrap_mode_v = \"", toString(m_meta.wrap_mode_v), "\""
+					, "\nwrap_mode_w = \"", toString(m_meta.wrap_mode_w), "\""
+					, "\nfilter = \"", toString(m_meta.filter), "\""
+				);
+				compiler.updateMeta(texture->getPath(), src);
+				if (compiler.compile(texture->getPath())) {
+					texture->getResourceManager().reload(*texture);
+				}
+			}
+		}
+	}
+
+
+	void onResourceUnloaded(Resource* resource) override {}
+	const char* getName() const override { return "Texture"; }
+	ResourceType getResourceType() const override { return Texture::TYPE; }
+
+
+	StudioApp& m_app;
+	Texture* m_texture;
+	gpu::TextureHandle m_texture_view = gpu::INVALID_TEXTURE;
+	JobSystem::SignalHandle m_tile_signal = JobSystem::INVALID_HANDLE;
+	Meta m_meta;
+	u32 m_meta_res = 0;
+	CompositeTexture m_composite;
+	void* m_composite_tag = nullptr;
+};
+
+struct ModelPropertiesPlugin final : PropertyGrid::IPlugin {
+	ModelPropertiesPlugin(StudioApp& app) : m_app(app) {}
+	
+	void update() {}
+	
+	void onGUI(PropertyGrid& grid, ComponentUID cmp) {
+		if (cmp.type != MODEL_INSTANCE_TYPE) return;
+
+		RenderScene* scene = (RenderScene*)cmp.scene;
+		Model* model = scene->getModelInstanceModel((EntityRef)cmp.entity);
+		if (!model || !model->isReady()) return;
+
+		const i32 count = model->getMeshCount();
+		bool open = true;
+		if (count > 1) {
+			open = ImGui::TreeNodeEx("Materials", ImGuiTreeNodeFlags_DefaultOpen);
+		}
+		if (open) {
+			for (i32 i = 0; i < count; ++i) {
+				Material* material = model->getMesh(i).material;
+				if(count == 1) ImGuiEx::Label("Material");
+				
+				const float w = ImGui::GetContentRegionAvail().x - 20;
+				ImGuiEx::TextClipped(material->getPath().c_str(), w);
+				ImGui::SameLine();
+				if (ImGuiEx::IconButton(ICON_FA_BULLSEYE, "Go to"))
+				{
+					m_app.getAssetBrowser().selectResource(material->getPath(), true, false);
+				}
+			}
+			if(count > 1) ImGui::TreePop();
+		}
+	}
+
+	StudioApp& m_app;
+};
 
 struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 {
@@ -899,7 +1660,7 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		for (i32 j = 0; j < size.y; ++j) {
 			for (i32 i = 0; i < size.x; ++i) {
 				const u32 idx = i + j * size.x;
-				if (data[idx] & 0x000000ff) {
+				if (data[idx] & 0xff000000) {
 					cells[i].x = i;
 					cells[i].y = j;
 				}
@@ -917,7 +1678,7 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		for (i32 j = 0; j < size.y; ++j) {
 			for (i32 i = 0; i < size.x; ++i) {
 				const u32 idx = i + j * size.x;
-				if (data[idx] & 0x000000ff) {
+				if (data[idx] & 0xff000000) {
 					cells[idx].x = i;
 					cells[idx].y = j;
 				}
@@ -943,7 +1704,7 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		for (i32 j = size.y - 1; j >= 0; --j) {
 			for (i32 i = size.x - 1; i>= 0; --i) {
 				const u32 idx = i + j * size.x;
-				if (data[idx] & 0xff) {
+				if (data[idx] & 0xff000000) {
 					cells[idx].x = i;
 					cells[idx].y = j;
 				}
@@ -968,24 +1729,31 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 		Array<u32> tmp(allocator);
 		tmp.resize(gb0->size());
-		for (i32 j = 0; j < size.y; ++j) {
-			for (i32 i = 0; i < size.x; ++i) {
-				const u32 idx = i + j * size.x;
-				const u8 alpha = data[idx] >> 24;
-				tmp[idx] = data[cells[idx].x + cells[idx].y * size.x];
-				tmp[idx] = (alpha << 24) | (tmp[idx] & 0xffFFff);
+		if (cells[0].x >= 0) {
+			for (i32 j = 0; j < size.y; ++j) {
+				for (i32 i = 0; i < size.x; ++i) {
+					const u32 idx = i + j * size.x;
+					const u8 alpha = data[idx] >> 24;
+					tmp[idx] = data[cells[idx].x + cells[idx].y * size.x];
+					tmp[idx] = (alpha << 24) | (tmp[idx] & 0xffFFff);
+				}
 			}
-		}
-		memcpy(gb0->begin(), tmp.begin(), tmp.byte_size());
+			memcpy(gb0->begin(), tmp.begin(), tmp.byte_size());
 
-		const u32* gb1_data = gb1->begin();
-		for (i32 j = 0; j < size.y; ++j) {
-			for (i32 i = 0; i < size.x; ++i) {
-				const u32 idx = i + j * size.x;
-				tmp[idx] = gb1_data[cells[idx].x + cells[idx].y * size.x];
+			const u32* gb1_data = gb1->begin();
+			for (i32 j = 0; j < size.y; ++j) {
+				for (i32 i = 0; i < size.x; ++i) {
+					const u32 idx = i + j * size.x;
+					tmp[idx] = gb1_data[cells[idx].x + cells[idx].y * size.x];
+				}
 			}
+			memcpy(gb1->begin(), tmp.begin(), tmp.byte_size());
 		}
-		memcpy(gb1->begin(), tmp.begin(), tmp.byte_size());
+		else {
+			// nothing was rendered
+			memset(gb0->begin(), 0xff, gb0->byte_size());
+			memset(gb1->begin(), 0xff, gb1->byte_size());
+		}
 	}
 
 	void onGUI(Span<Resource*> resources) override
@@ -995,84 +1763,91 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		auto* model = static_cast<Model*>(resources[0]);
 
 		if (model->isReady()) {
-			ImGui::LabelText("Bounding radius", "%f", model->getBoundingRadius());
+			ImGuiEx::Label("Bounding radius");
+			ImGui::Text("%f", model->getBoundingRadius());
 
-			auto* lods = model->getLODs();
-			if (lods[0].to_mesh >= 0 && !model->isFailure())
-			{
-				ImGui::Separator();
-				ImGui::Columns(4);
-				ImGui::Text("LOD");
-				ImGui::NextColumn();
-				ImGui::Text("Distance");
-				ImGui::NextColumn();
-				ImGui::Text("# of meshes");
-				ImGui::NextColumn();
-				ImGui::Text("# of triangles");
-				ImGui::NextColumn();
-				ImGui::Separator();
-				int lod_count = 1;
-				for (int i = 0; i < Model::MAX_LOD_COUNT && lods[i].to_mesh >= 0; ++i)
+			if (ImGui::CollapsingHeader("LODs")) {
+				auto* lods = model->getLODs();
+				if (lods[0].to_mesh >= 0 && !model->isFailure())
 				{
-					ImGui::PushID(i);
-					ImGui::Text("%d", i);
+					ImGui::Separator();
+					ImGui::Columns(4);
+					ImGui::Text("LOD");
 					ImGui::NextColumn();
-					if (lods[i].distance == FLT_MAX)
+					ImGui::Text("Distance");
+					ImGui::NextColumn();
+					ImGui::Text("# of meshes");
+					ImGui::NextColumn();
+					ImGui::Text("# of triangles");
+					ImGui::NextColumn();
+					ImGui::Separator();
+					int lod_count = 1;
+					for (int i = 0; i < Model::MAX_LOD_COUNT && lods[i].to_mesh >= 0; ++i)
 					{
-						ImGui::Text("Infinite");
-					}
-					else
-					{
-						float dist = sqrtf(lods[i].distance);
-						if (ImGui::DragFloat("", &dist))
+						ImGui::PushID(i);
+						ImGui::Text("%d", i);
+						ImGui::NextColumn();
+						if (lods[i].distance == FLT_MAX)
 						{
-							lods[i].distance = dist * dist;
+							ImGui::Text("Infinite");
 						}
-					}
-					ImGui::NextColumn();
-					ImGui::Text("%d", lods[i].to_mesh - lods[i].from_mesh + 1);
-					ImGui::NextColumn();
-					int tri_count = 0;
-					for (int j = lods[i].from_mesh; j <= lods[i].to_mesh; ++j)
-					{
-						int indices_count = model->getMesh(j).indices.size() >> 1;
-						if (!model->getMesh(j).flags.isSet(Mesh::Flags::INDICES_16_BIT)) {
-							indices_count >>= 1;
+						else
+						{
+							float dist = sqrtf(lods[i].distance);
+							if (ImGui::DragFloat("", &dist))
+							{
+								lods[i].distance = dist * dist;
+							}
 						}
-						tri_count += indices_count / 3;
+						ImGui::NextColumn();
+						ImGui::Text("%d", lods[i].to_mesh - lods[i].from_mesh + 1);
+						ImGui::NextColumn();
+						int tri_count = 0;
+						for (int j = lods[i].from_mesh; j <= lods[i].to_mesh; ++j)
+						{
+							i32 indices_count = (i32)model->getMesh(j).indices.size() >> 1;
+							if (!model->getMesh(j).flags.isSet(Mesh::Flags::INDICES_16_BIT)) {
+								indices_count >>= 1;
+							}
+							tri_count += indices_count / 3;
 
+						}
+
+						ImGui::Text("%d", tri_count);
+						ImGui::NextColumn();
+						++lod_count;
+						ImGui::PopID();
 					}
 
-					ImGui::Text("%d", tri_count);
-					ImGui::NextColumn();
-					++lod_count;
-					ImGui::PopID();
+					ImGui::Columns(1);
 				}
-
-				ImGui::Columns(1);
 			}
-
-			ImGui::Separator();
 		}
 
-		for (int i = 0; i < model->getMeshCount(); ++i)
-		{
-			auto& mesh = model->getMesh(i);
-			if (ImGui::TreeNode(&mesh, "%s", mesh.name.length() > 0 ? mesh.name.c_str() : "N/A"))
+		if (ImGui::CollapsingHeader("Meshes")) {
+			for (int i = 0; i < model->getMeshCount(); ++i)
 			{
-				ImGui::LabelText("Triangle count", "%d", (mesh.indices.size() >> (mesh.areIndices16() ? 1 : 2))/ 3);
-				ImGui::LabelText("Material", "%s", mesh.material->getPath().c_str());
-				ImGui::SameLine();
-				if (ImGui::Button("->"))
+				auto& mesh = model->getMesh(i);
+				if (ImGui::TreeNode(&mesh, "%s", mesh.name.length() > 0 ? mesh.name.c_str() : "N/A"))
 				{
-					m_app.getAssetBrowser().selectResource(mesh.material->getPath(), true, false);
+					ImGuiEx::Label("Triangle count");
+					ImGui::Text("%d", ((i32)mesh.indices.size() >> (mesh.areIndices16() ? 1 : 2))/ 3);
+					ImGuiEx::Label("Material");
+					const float w = ImGui::GetContentRegionAvail().x - 20;
+					ImGuiEx::TextClipped(mesh.material->getPath().c_str(), w);
+					ImGui::SameLine();
+					if (ImGuiEx::IconButton(ICON_FA_BULLSEYE, "Go to"))
+					{
+						m_app.getAssetBrowser().selectResource(mesh.material->getPath(), true, false);
+					}
+					ImGui::TreePop();
 				}
-				ImGui::TreePop();
 			}
 		}
 
-		if (model->isReady()) {
-			ImGui::LabelText("Bone count", "%d", model->getBoneCount());
+		if (model->isReady() && ImGui::CollapsingHeader("Bones")) {
+			ImGuiEx::Label("Count");
+			ImGui::Text("%d", model->getBoneCount());
 			if (model->getBoneCount() > 0 && ImGui::CollapsingHeader("Bones")) {
 				ImGui::Columns(3);
 				for (int i = 0; i < model->getBoneCount(); ++i)
@@ -1095,25 +1870,31 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 				m_meta = getMeta(model->getPath());
 				m_meta_res = model->getPath().getHash();
 			}
-			ImGui::InputFloat("Max position error", &m_meta.position_error);
-			ImGui::InputFloat("Max rotation error", &m_meta.rotation_error);
-			ImGui::InputFloat("Scale", &m_meta.scale);
-			ImGui::Checkbox("Split", &m_meta.split);
-			ImGui::Checkbox("Create impostor", &m_meta.create_impostor);
+			ImGuiEx::Label("Max position error");
+			ImGui::InputFloat("##maxposer", &m_meta.position_error);
+			ImGuiEx::Label("Max rotation error");
+			ImGui::InputFloat("##maxroter", &m_meta.rotation_error);
+			ImGuiEx::Label("Scale");
+			ImGui::InputFloat("##scale", &m_meta.scale);
+			ImGuiEx::Label("Split");
+			ImGui::Checkbox("##split", &m_meta.split);
+			ImGuiEx::Label("Create impostor mesh");
+			ImGui::Checkbox("##creimp", &m_meta.create_impostor);
 			for(u32 i = 0; i < lengthOf(m_meta.lods_distances); ++i) {
 				bool infinite = m_meta.lods_distances[i] <= 0;
 				if(ImGui::Checkbox(StaticString<32>("Infinite LOD ", i), &infinite)) {
 					m_meta.lods_distances[i] *= -1;
 				}
+				if (infinite) break;
+
 				if (m_meta.lods_distances[i] > 0) {
 					ImGui::SameLine();
-					ImGui::PushItemWidth(-1);
+					ImGui::SetNextItemWidth(-1);
 					ImGui::DragFloat(StaticString<32>("##lod", i), &m_meta.lods_distances[i]);
-					ImGui::PopItemWidth();
 				}
 			}
 			
-			if (ImGui::Button("Apply")) {
+			if (ImGui::Button(ICON_FA_CHECK "Apply")) {
 				String src(m_app.getAllocator());
 				src.cat("create_impostor=").cat(m_meta.create_impostor ? "true" : "false")
 					.cat("\nposition_error = ").cat(m_meta.position_error)
@@ -1133,6 +1914,7 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 					model->getResourceManager().reload(*model);
 				}
 			}
+			ImGui::SameLine();
 			if (ImGui::Button("Create impostor texture")) {
 				FBXImporter importer(m_app);
 				IAllocator& allocator = m_app.getAllocator();
@@ -1146,8 +1928,9 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 				ASSERT(gb0.size() == tile_size.x * 9 * tile_size.y * 9);
 				
 				OS::OutputFile file;
-				if (file.open(img_path)) {
-					Texture::saveTGA(&file, tile_size.x * 9, tile_size.y * 9, gpu::TextureFormat::RGBA8, (const u8*)gb0.begin(), true, Path(img_path), allocator);
+				FileSystem& fs = m_app.getWorldEditor().getEngine().getFileSystem();
+				if (fs.open(img_path, Ref(file))) {
+					Texture::saveTGA(&file, tile_size.x * 9, tile_size.y * 9, gpu::TextureFormat::RGBA8, (const u8*)gb0.begin(), gpu::isOriginBottomLeft(), Path(img_path), allocator);
 					file.close();
 				}
 				else {
@@ -1156,15 +1939,20 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 				img_path = fi.m_dir;
 				img_path << fi.m_basename << "_impostor1.tga";
-				if (file.open(img_path)) {
-					Texture::saveTGA(&file, tile_size.x * 9, tile_size.y * 9, gpu::TextureFormat::RGBA8, (const u8*)gb1.begin(), true, Path(img_path), allocator);
+				if (fs.open(img_path, Ref(file))) {
+					Texture::saveTGA(&file, tile_size.x * 9, tile_size.y * 9, gpu::TextureFormat::RGBA8, (const u8*)gb1.begin(), gpu::isOriginBottomLeft(), Path(img_path), allocator);
 					file.close();
 				}
 				else {
 					logError("Renderer") << "Failed to open " << img_path;
 				}
 			}
-		}
+			ImGui::SameLine();
+			ImGui::TextDisabled("(?)");
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("%s", "To use impostors, check `Create impostor mesh` and press this button. "
+				"When the mesh changes, you need to regenerate the impostor texture by pressing this button again.");
+			}
 
 		showPreview(*model);
 	}
@@ -1186,6 +1974,9 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		Resource* resource;
 		if (Path::hasExtension(path.c_str(), "fab")) {
 			resource = resource_manager.load<PrefabResource>(path);
+		}
+		else if (Path::hasExtension(path.c_str(), "mat")) {
+			resource = resource_manager.load<Material>(path);
 		}
 		else {
 			resource = resource_manager.load<Model>(path);
@@ -1231,12 +2022,13 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 				FileSystem& fs = engine.getFileSystem();
 				StaticString<MAX_PATH_LENGTH> path(fs.getBasePath(), ".lumix/asset_tiles/", m_tile.path_hash, ".dds");
 				
+				u8* raw_tile_data = m_tile.data.getMutableData();
 				for (u32 i = 0; i < u32(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE); ++i) {
-					swap(m_tile.data[i * 4 + 0], m_tile.data[i * 4 + 2]);
+					swap(raw_tile_data[i * 4 + 0], raw_tile_data[i * 4 + 2]);
 				}
 
-				saveAsDDS(path, &m_tile.data[0], AssetBrowser::TILE_SIZE, AssetBrowser::TILE_SIZE);
-				memset(m_tile.data.begin(), 0, m_tile.data.byte_size());
+				saveAsDDS(path, m_tile.data.data(), AssetBrowser::TILE_SIZE, AssetBrowser::TILE_SIZE);
+				memset(m_tile.data.getMutableData(), 0, m_tile.data.size());
 				Renderer* renderer = (Renderer*)engine.getPluginManager().getPlugin("renderer");
 				renderer->destroy(m_tile.texture);
 				m_tile.entity = INVALID_ENTITY;
@@ -1259,6 +2051,9 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 		if (resource->getType() == Model::TYPE) {
 			renderTile((Model*)resource, nullptr, nullptr);
+		}
+		else if (resource->getType() == Material::TYPE) {
+			renderTile((Material*)resource);
 		}
 		else if (resource->getType() == PrefabResource::TYPE) {
 			renderTile((PrefabResource*)resource);
@@ -1339,11 +2134,24 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 		m_tile.data.resize(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE * 4);
 		m_tile.texture = gpu::allocTextureHandle(); 
-		renderer->getTextureImage(m_tile.pipeline->getOutput(), AssetBrowser::TILE_SIZE, AssetBrowser::TILE_SIZE, gpu::TextureFormat::RGBA8,  Span(m_tile.data.begin(), m_tile.data.end()));
+		renderer->getTextureImage(m_tile.pipeline->getOutput()
+			, AssetBrowser::TILE_SIZE
+			, AssetBrowser::TILE_SIZE
+			, gpu::TextureFormat::RGBA8
+			, Span(m_tile.data.getMutableData(), (u32)m_tile.data.size()));
 		
 		m_tile.frame_countdown = 2;
 	}
 
+
+	void renderTile(Material* material) {
+		if (material->getTextureCount() == 0) return;
+		const char* in_path = material->getTexture(0)->getPath().c_str();
+		Engine& engine = m_app.getEngine();
+		StaticString<MAX_PATH_LENGTH> out_path(".lumix/asset_tiles/", material->getPath().getHash(), ".dds");
+
+		m_texture_plugin->createTile(in_path, out_path, Texture::TYPE);
+	}
 
 	void renderTile(Model* model, const DVec3* in_pos, const Quat* in_rot)
 	{
@@ -1379,7 +2187,11 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 
 		m_tile.texture = gpu::allocTextureHandle(); 
 		m_tile.data.resize(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE * 4);
-		renderer->getTextureImage(m_tile.pipeline->getOutput(), AssetBrowser::TILE_SIZE, AssetBrowser::TILE_SIZE, gpu::TextureFormat::RGBA8, Span(m_tile.data.begin(), m_tile.data.end()));
+		renderer->getTextureImage(m_tile.pipeline->getOutput()
+			, AssetBrowser::TILE_SIZE
+			, AssetBrowser::TILE_SIZE
+			, gpu::TextureFormat::RGBA8
+			, Span(m_tile.data.getMutableData(), (u32)m_tile.data.size()));
 		
 		m_tile.entity = mesh_entity;
 		m_tile.frame_countdown = 2;
@@ -1391,10 +2203,9 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 	bool createTile(const char* in_path, const char* out_path, ResourceType type) override
 	{
 		FileSystem& fs = m_app.getEngine().getFileSystem();
-		if (type == Material::TYPE) return fs.copyFile("models/editor/tile_material.dds", out_path);
 		if (type == Shader::TYPE) return fs.copyFile("models/editor/tile_shader.dds", out_path);
 
-		if (type != Model::TYPE && type != PrefabResource::TYPE) return false;
+		if (type != Model::TYPE && type != Material::TYPE && type != PrefabResource::TYPE) return false;
 
 		Path path(in_path);
 
@@ -1423,7 +2234,7 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		EntityPtr entity = INVALID_ENTITY;
 		int frame_countdown = -1;
 		u32 path_hash;
-		Array<u8> data;
+		OutputMemoryStream data;
 		gpu::TextureHandle texture = gpu::INVALID_TEXTURE;
 		Queue<Resource*, 8> queue;
 		Array<Path> paths;
@@ -1440,851 +2251,9 @@ struct ModelPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 	bool m_is_mouse_captured;
 	int m_captured_mouse_x;
 	int m_captured_mouse_y;
+	TexturePlugin* m_texture_plugin;
 	FBXImporter m_fbx_importer;
 	JobSystem::SignalHandle m_subres_signal = JobSystem::INVALID_HANDLE;
-};
-
-
-struct TexturePlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
-{
-	struct Meta
-	{
-		enum WrapMode : u32 {
-			REPEAT,
-			CLAMP
-		};
-		enum Filter : u32 {
-			LINEAR,
-			POINT
-		};
-		bool srgb = false;
-		bool is_normalmap = false;
-		float scale_coverage = -1;
-		bool convert_to_raw = false;
-		WrapMode wrap_mode_u = WrapMode::REPEAT;
-		WrapMode wrap_mode_v = WrapMode::REPEAT;
-		WrapMode wrap_mode_w = WrapMode::REPEAT;
-		Filter filter = Filter::LINEAR;
-	};
-
-	explicit TexturePlugin(StudioApp& app)
-		: m_app(app)
-		, m_composite(app.getAllocator())
-	{
-		app.getAssetCompiler().registerExtension("png", Texture::TYPE);
-		app.getAssetCompiler().registerExtension("jpg", Texture::TYPE);
-		app.getAssetCompiler().registerExtension("tga", Texture::TYPE);
-		app.getAssetCompiler().registerExtension("dds", Texture::TYPE);
-		app.getAssetCompiler().registerExtension("raw", Texture::TYPE);
-		app.getAssetCompiler().registerExtension("ltc", Texture::TYPE);
-	}
-
-
-	~TexturePlugin() {
-		PluginManager& plugin_manager = m_app.getEngine().getPluginManager();
-		auto* renderer = (Renderer*)plugin_manager.getPlugin("renderer");
-		if(m_texture_view.isValid()) {
-			renderer->destroy(m_texture_view);
-		}
-	}
-
-	const char* getDefaultExtension() const override { return "ltc"; }
-	const char* getFileDialogFilter() const override { return "Composite texture\0*.ltc\0"; }
-	const char* getFileDialogExtensions() const override { return "ltc"; }
-	bool canCreateResource() const override { return true; }
-	bool createResource(const char* path) override { 
-		OS::OutputFile file;
-		if (!file.open(path)) {
-			logError("Renderer") << "Failed to create " << path;
-			return false;
-		}
-
-		file.close();
-		return true;
-	}
-
-	struct TextureTileJob
-	{
-		TextureTileJob(FileSystem& filesystem, IAllocator& allocator) 
-			: m_allocator(allocator) 
-			, m_filesystem(filesystem)
-		{}
-
-		void execute() {
-			IAllocator& allocator = m_allocator;
-
-			u32 hash = crc32(m_in_path);
-			StaticString<MAX_PATH_LENGTH> out_path(".lumix/asset_tiles/", hash, ".dds");
-			Array<u8> resized_data(allocator);
-			resized_data.resize(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE * 4);
-			if (Path::hasExtension(m_in_path, "dds")) {
-				OS::InputFile file;
-				if (!file.open(m_in_path)) {
-					m_filesystem.copyFile("models/editor/tile_texture.dds", out_path);
-					logError("Editor") << "Failed to load " << m_in_path;
-					return;
-				}
-				Array<u8> data(allocator);
-				data.resize((int)file.size());
-				file.read(&data[0], data.size());
-				file.close();
-
-				nvtt::Surface surface;
-				if (!surface.load(m_in_path, data.begin(), data.byte_size())) {
-					logError("Editor") << "Failed to load " << m_in_path;
-					m_filesystem.copyFile("models/editor/tile_texture.dds", out_path);
-					return;
-				}
-
-				Array<u8> decompressed(allocator);
-				const int w = surface.width();
-				const int h = surface.height();
-				decompressed.resize(4 * w * h);
-				for (int c = 0; c < 4; ++c) {
-					const float* data = surface.channel(c);
-					for (int j = 0; j < h; ++j) {
-						for (int i = 0; i < w; ++i) {
-							const u8 p = u8(data[j * w + i] * 255.f + 0.5f);
-							decompressed[(j * w + i) * 4 + c] = p;
-						}
-					}
-				}
-
-				stbir_resize_uint8((const u8*)decompressed.begin(),
-					w,
-					h,
-					0,
-					&resized_data[0],
-					AssetBrowser::TILE_SIZE,
-					AssetBrowser::TILE_SIZE,
-					0,
-					4);
-			}
-			else
-			{
-				int image_comp;
-				int w, h;
-				auto data = stbi_load(m_in_path, &w, &h, &image_comp, 4);
-				if (!data)
-				{
-					logError("Editor") << "Failed to load " << m_in_path;
-					m_filesystem.copyFile("models/editor/tile_texture.dds", out_path);
-					return;
-				}
-				stbir_resize_uint8(data,
-					w,
-					h,
-					0,
-					&resized_data[0],
-					AssetBrowser::TILE_SIZE,
-					AssetBrowser::TILE_SIZE,
-					0,
-					4);
-				for (u32 i = 0; i < u32(AssetBrowser::TILE_SIZE * AssetBrowser::TILE_SIZE); ++i) {
-					swap(resized_data[i * 4 + 0], resized_data[i * 4 + 2]);
-				}
-				stbi_image_free(data);
-			}
-
-			if (!saveAsDDS(m_out_path, &resized_data[0], AssetBrowser::TILE_SIZE, AssetBrowser::TILE_SIZE)) {
-				logError("Editor") << "Failed to save " << m_out_path;
-			}
-		}
-
-		static void execute(void* data) {
-			PROFILE_FUNCTION();
-			TextureTileJob* that = (TextureTileJob*)data;
-			that->execute();
-			LUMIX_DELETE(that->m_allocator, that);
-		}
-
-		IAllocator& m_allocator;
-		FileSystem& m_filesystem;
-		StaticString<MAX_PATH_LENGTH> m_in_path; 
-		StaticString<MAX_PATH_LENGTH> m_out_path; 
-	};
-
-
-	bool createTile(const char* in_path, const char* out_path, ResourceType type) override
-	{
-		if (type == Texture::TYPE && !Path::hasExtension(in_path, "ltc") && !Path::hasExtension(in_path, "raw")) {
-			IAllocator& allocator = m_app.getAllocator();
-			FileSystem& fs = m_app.getEngine().getFileSystem();
-			auto* job = LUMIX_NEW(allocator, TextureTileJob)(fs, allocator);
-			job->m_in_path = fs.getBasePath();
-			job->m_in_path << in_path;
-			job->m_out_path = fs.getBasePath();
-			job->m_out_path << out_path;
-			JobSystem::SignalHandle signal = JobSystem::INVALID_HANDLE;
-			JobSystem::runEx(job, &TextureTileJob::execute, &signal, m_tile_signal, JobSystem::getWorkersCount() - 1);
-			m_tile_signal = signal;
-			return true;
-		}
-		return false;
-	}
-
-	struct TextureComposite {
-		struct ChannelSource {
-			Path path;
-			u32 src_channel = 0;
-		};
-		
-		struct Layer {
-			ChannelSource red = {{}, 0};
-			ChannelSource green = {{}, 1};
-			ChannelSource blue = {{}, 2};
-			ChannelSource alpha = {{}, 3};
-
-			ChannelSource& getChannel(u32 i) {
-				switch(i) {
-					case 0: return red;
-					case 1: return green;
-					case 2: return blue;
-					case 3: return alpha;
-					default: ASSERT(false); return red;
-				}
-			}
-		};
-
-		enum class Output {
-			BC1,
-			BC3
-		};
-
-		static TextureComposite& getThis(lua_State* L) {
-			lua_getfield(L, LUA_GLOBALSINDEX, "this");
-			TextureComposite* tc = (TextureComposite*)lua_touserdata(L, -1);
-			lua_pop(L, 1);
-			ASSERT(tc);
-			return *tc;
-		}
-
-		static ChannelSource toChannelSource(lua_State* L, int idx) {
-			ChannelSource res;
-			if (!lua_istable(L, idx)) {
-				luaL_argerror(L, 1, "unexpected form");
-			}
-			const size_t l = lua_objlen(L, idx);
-			if (l == 0) {
-				luaL_argerror(L, 1, "unexpected form");
-			}
-			lua_rawgeti(L, idx, 1);
-			if (!lua_isstring(L, -1)) {
-				luaL_argerror(L, 1, "unexpected form");
-			}
-			res.path = lua_tostring(L, -1);
-			lua_pop(L, 1);
-
-			if (l > 1) {
-				lua_rawgeti(L, idx, 2);
-				if (!lua_isnumber(L, -1)) {
-					luaL_argerror(L, 1, "unexpected form");
-				}
-				res.src_channel = (u32)lua_tointeger(L, -1);
-				lua_pop(L, 1);
-			}
-
-			return res;
-		}
-
-		static int LUA_layer(lua_State* L) {
-			LuaWrapper::DebugGuard guard(L);
-			LuaWrapper::checkTableArg(L, 1);
-			TextureComposite& that = getThis(L);
-
-			Layer& layer = that.layers.emplace();
-
-			lua_pushnil(L);
-			while (lua_next(L, 1)) {
-				const char* key = LuaWrapper::toType<const char*>(L, -2);
-				if (equalIStrings(key, "rgb")) {
-					layer.red = toChannelSource(L, -1);
-					layer.green = layer.red;
-					layer.blue = layer.red;
-					layer.red.src_channel = 0;
-					layer.green.src_channel = 1;
-					layer.blue.src_channel = 2;
-				}
-				else if (equalIStrings(key, "alpha")) {
-					layer.alpha = toChannelSource(L, -1);
-				}
-				else if (equalIStrings(key, "red")) {
-					layer.red = toChannelSource(L, -1);
-				}
-				else if (equalIStrings(key, "green")) {
-					layer.green = toChannelSource(L, -1);
-				}
-				else if (equalIStrings(key, "blue")) {
-					layer.blue = toChannelSource(L, -1);
-				}
-				else {
-					luaL_argerror(L, 1, StaticString<128>("unknown key ", key));
-				}
-				lua_pop(L, 1);
-			}
-			return 0;
-		}
-
-		static int LUA_output(lua_State* L) {
-			const char* type = LuaWrapper::checkArg<const char*>(L, 1);
-			
-			TextureComposite& that = getThis(L);
-			if (equalIStrings(type, "bc1")) {
-				that.output = Output::BC1;
-			}
-			else if (equalIStrings(type, "bc3")) {
-				that.output = Output::BC3;
-			}
-			else {
-				luaL_argerror(L, 1, "unknown value");
-			}
-			return 0;
-		}
-
-		TextureComposite(IAllocator& allocator)
-			: layers(allocator)
-		{}
-
-		bool init(Span<u8> data, const char* src_path) {
-			layers.clear();
-			output = Output::BC1;
-
-			lua_State* L = luaL_newstate();
-			luaL_openlibs(L);
-
-			lua_pushlightuserdata(L, this);
-			lua_setfield(L, LUA_GLOBALSINDEX, "this");
-		
-			#define DEFINE_LUA_FUNC(func) \
-				lua_pushcfunction(L, TextureComposite::LUA_##func); \
-				lua_setfield(L, LUA_GLOBALSINDEX, #func); 
-
-			DEFINE_LUA_FUNC(layer)
-			DEFINE_LUA_FUNC(output)
-		
-			#undef DEFINE_LUA_FUNC
-
-			bool success = LuaWrapper::execute(L, Span((const char*)data.begin(), (const char*)data.end()), src_path, 0);
-			lua_close(L);
-			return success;
-		}
-
-		Array<Layer> layers;
-		Output output = Output::BC1;
-	};
-
-	bool createComposite(const Array<u8>& src_data, OutputMemoryStream& dst, const Meta& meta, const char* src_path) {
-		IAllocator& allocator = m_app.getAllocator();
-		TextureComposite tc(allocator);
-		if (!tc.init(Span(src_data.begin(), src_data.end()), src_path)) return false;
-		struct Src {
-			stbi_uc* data;
-			int w, h;
-			Path path;
-		};
-
-		HashMap<u32, Src> sources(allocator);
-		FileSystem& fs = m_app.getEngine().getFileSystem();
-		Array<u8> tmp_src(allocator);
-		int w = -1, h = -1;
-
-		auto prepare_source =[&](const TextureComposite::ChannelSource& ch){
-			if (!ch.path.isValid()) return false;
-			if (sources.find(ch.path.getHash()).isValid()) return true;
-
-			tmp_src.clear();
-			if (!fs.getContentSync(ch.path, Ref(tmp_src))) {
-				return false;
-			}
-
-			int cmp;
-			stbi_uc* data = stbi_load_from_memory(tmp_src.begin(), tmp_src.byte_size(), &w, &h, &cmp, 4);
-			if (!data) {
-				return false;
-			}
-
-			sources.insert(ch.path.getHash(), {data, w, h, ch.path});
-			return true;
-		};
-
-		bool success = true;
-		for (TextureComposite::Layer& layer : tc.layers) {
-			success = success && prepare_source(layer.red);
-			success = success && prepare_source(layer.green);
-			success = success && prepare_source(layer.blue);
-			success = success && prepare_source(layer.alpha);
-		}
-
-		if (!success) return false;
-
-		if (tc.layers.empty()) {
-			return true;
-		}
-
-		if (sources.size() == 0) return false;
-		const Src first_src = sources.begin().value(); 
-		for (auto iter = sources.begin(); iter.isValid(); ++iter) {
-			if (iter.value().w != first_src.w || iter.value().h != first_src.h) {
-				logError("Renderer") << src_path << ": " << first_src.path << "(" << first_src.w << "x" << first_src.h << ") does not match "
-					<< iter.value().path << "(" << iter.value().w << "x" << iter.value().h << ")";
-				return false;
-			}
-		}
-
-		nvtt::InputOptions input;
-		input.setMipmapGeneration(true);
-		input.setAlphaCoverageMipScale(meta.scale_coverage, 4);
-		input.setAlphaMode(nvtt::AlphaMode_Transparency);
-		input.setNormalMap(meta.is_normalmap);
-		input.setTextureLayout(nvtt::TextureType_Array, w, h, 1, tc.layers.size());
-		
-		Array<u8> out_data(allocator);
-		out_data.resize(w * h * 4);
-		for (TextureComposite::Layer& layer : tc.layers) {
-			const u32 idx = u32(&layer - tc.layers.begin());
-			for (u32 ch = 0; ch < 4; ++ch) {
-				const Path& p = layer.getChannel(ch).path;
-				if (!p.isValid()) continue;
-				stbi_uc* from = sources[p.getHash()].data;
-				if (!from) continue;
-				u32 from_ch = layer.getChannel(ch).src_channel;
-				if (from_ch == 0) from_ch = 2;
-				else if (from_ch == 2) from_ch = 0;
-
-				for (u32 j = 0; j < (u32)h; ++j) {
-					for (u32 i = 0; i < (u32)w; ++i) {
-						out_data[(j * w + i) * 4 + ch] = from[(i + j * w) * 4 + from_ch];
-					}
-				}
-			}
-
-			input.setMipmapData(out_data.begin(), w, h, 1, idx);
-		}
-
-		for (const Src& i : sources) {
-			free(i.data);
-		}
-
-		nvtt::OutputOptions output;
-		output.setSrgbFlag(meta.srgb);
-		output.setContainer(nvtt::Container_DDS10);
-		struct : nvtt::OutputHandler {
-			bool writeData(const void * data, int size) override { return dst->write(data, size); }
-			void beginImage(int size, int width, int height, int depth, int face, int miplevel) override {}
-			void endImage() override {}
-
-			OutputMemoryStream* dst;
-		} output_handler;
-		output_handler.dst = &dst;
-		output.setOutputHandler(&output_handler);
-
-		nvtt::CompressionOptions compression;
-		// TODO format
-		compression.setFormat(nvtt::Format_BC3);
-		compression.setQuality(nvtt::Quality_Fastest);
-
-		dst.write("dds", 3);
-		u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
-		flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
-		flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
-		flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
-		flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
-		dst.write(&flags, sizeof(flags));
-
-		nvtt::Context context;
-		if (!context.process(input, compression, output)) {
-			return false;
-		}
-		return true;
-	}
-
-	bool compileImage(const Path& path, const Array<u8>& src_data, OutputMemoryStream& dst, const Meta& meta)
-	{
-		PROFILE_FUNCTION();
-		int w, h, comps;
-		const bool is_16_bit = stbi_is_16_bit_from_memory(src_data.begin(), src_data.byte_size());
-		if (is_16_bit) {
-			logError("Renderer") << path << ": 16bit images not yet supported.";
-		}
-
-		stbi_uc* data = stbi_load_from_memory(src_data.begin(), src_data.byte_size(), &w, &h, &comps, 4);
-		if (!data) return false;
-
-		if(meta.convert_to_raw) {
-			dst.write("raw", 3);
-			u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
-			flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
-			flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
-			flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
-			flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
-			dst.write(&flags, sizeof(flags));
-			for (int j = 0; j < h; ++j) {
-				for (int i = 0; i < w; ++i) {
-					const u16 tmp = (u16)data[(i + j * w) * 4] * 256;
-					dst.write(tmp);
-				}
-			}
-			return true;
-		}
-
-		for (u32 i = 0; i < u32(w * h); ++i) {
-			swap(data[i * 4 + 0], data[i * 4 + 2]);
-		}
-
-		dst.write("dds", 3);
-		u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
-		flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
-		flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
-		flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
-		flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
-		dst.write(&flags, sizeof(flags));
-
-		nvtt::Context context;
-		
-		const bool has_alpha = comps == 4;
-		nvtt::InputOptions input;
-		input.setMipmapGeneration(true);
-		input.setAlphaCoverageMipScale(meta.scale_coverage, comps == 4 ? 3 : 0);
-		input.setAlphaMode(has_alpha ? nvtt::AlphaMode_Transparency : nvtt::AlphaMode_None);
-		input.setNormalMap(meta.is_normalmap);
-		input.setTextureLayout(nvtt::TextureType_2D, w, h);
-		input.setMipmapData(data, w, h);
-		stbi_image_free(data);
-		
-		nvtt::OutputOptions output;
-		output.setSrgbFlag(meta.srgb);
-		struct : nvtt::OutputHandler {
-			bool writeData(const void * data, int size) override { return dst->write(data, size); }
-			void beginImage(int size, int width, int height, int depth, int face, int miplevel) override {}
-			void endImage() override {}
-
-			OutputMemoryStream* dst;
-		} output_handler;
-		output_handler.dst = &dst;
-		output.setOutputHandler(&output_handler);
-
-		nvtt::CompressionOptions compression;
-		compression.setFormat(meta.is_normalmap ? nvtt::Format_DXT5n : (has_alpha ? nvtt::Format_DXT5 : nvtt::Format_DXT1));
-		compression.setQuality(nvtt::Quality_Normal);
-
-		if (!context.process(input, compression, output)) {
-			return false;
-		}
-		return true;
-	}
-
-
-	Meta getMeta(const Path& path) const
-	{
-		Meta meta;
-		m_app.getAssetCompiler().getMeta(path, [&meta](lua_State* L){
-			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "srgb", &meta.srgb);
-			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "convert_to_raw", &meta.convert_to_raw);
-			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "mip_scale_coverage", &meta.scale_coverage);
-			LuaWrapper::getOptionalField(L, LUA_GLOBALSINDEX, "normalmap", &meta.is_normalmap);
-			char tmp[32];
-			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "filter", Span(tmp))) {
-				if (stricmp(tmp, "point") == 0) {
-					meta.filter = Meta::Filter::POINT;
-				}
-				else {
-					meta.filter = Meta::Filter::LINEAR;
-				}
-			}
-			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "wrap_mode_u", Span(tmp))) {
-				meta.wrap_mode_u = stricmp(tmp, "repeat") == 0 ? Meta::WrapMode::REPEAT : Meta::WrapMode::CLAMP;
-			}
-			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "wrap_mode_v", Span(tmp))) {
-				meta.wrap_mode_v = stricmp(tmp, "repeat") == 0 ? Meta::WrapMode::REPEAT : Meta::WrapMode::CLAMP;
-			}
-			if(LuaWrapper::getOptionalStringField(L, LUA_GLOBALSINDEX, "wrap_mode_w", Span(tmp))) {
-				meta.wrap_mode_w = stricmp(tmp, "repeat") == 0 ? Meta::WrapMode::REPEAT : Meta::WrapMode::CLAMP;
-			}
-		});
-		return meta;
-	}
-
-	bool compile(const Path& src) override
-	{
-		char ext[4] = {};
-		Path::getExtension(Span(ext), Span(src.c_str(), src.length()));
-
-		FileSystem& fs = m_app.getEngine().getFileSystem();
-		Array<u8> src_data(m_app.getAllocator());
-		if (!fs.getContentSync(src, Ref(src_data))) return false;
-		
-		OutputMemoryStream out(m_app.getAllocator());
-		Meta meta = getMeta(src);
-		if (equalStrings(ext, "dds") || equalStrings(ext, "raw") || equalStrings(ext, "tga")) {
-			if (meta.scale_coverage < 0 || !equalStrings(ext, "tga")) {
-				out.write(ext, sizeof(ext) - 1);
-				u32 flags = meta.srgb ? (u32)Texture::Flags::SRGB : 0;
-				flags |= meta.wrap_mode_u == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_U : 0;
-				flags |= meta.wrap_mode_v == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_V : 0;
-				flags |= meta.wrap_mode_w == Meta::WrapMode::CLAMP ? (u32)Texture::Flags::CLAMP_W : 0;
-				flags |= meta.filter == Meta::Filter::POINT ? (u32)Texture::Flags::POINT : 0;
-				out.write(flags);
-				out.write(src_data.begin(), src_data.byte_size());
-			}
-			else {
-				compileImage(src, src_data, out, meta);
-			}
-		}
-		else if(equalStrings(ext, "jpg") || equalStrings(ext, "png")) {
-			compileImage(src, src_data, out, meta);
-		}
-		else if (equalStrings(ext, "ltc")) {
-			if (!createComposite(src_data, out, meta, src.c_str())) {
-				return false;
-			}
-		}
-		else {
-			ASSERT(false);
-		}
-
-		return m_app.getAssetCompiler().writeCompiledResource(src.c_str(), Span((u8*)out.getData(), (i32)out.getPos()));
-	}
-
-	const char* toString(Meta::Filter filter) {
-		switch (filter) {
-			case Meta::Filter::POINT: return "point";
-			case Meta::Filter::LINEAR: return "linear";
-			default: ASSERT(false); return "linear";
-		}
-	}
-
-	const char* toString(Meta::WrapMode wrap) {
-		switch (wrap) {
-			case Meta::WrapMode::CLAMP: return "clamp";
-			case Meta::WrapMode::REPEAT: return "repeat";
-			default: ASSERT(false); return "repeat";
-		}
-	}
-
-	void compositeGUI(Texture& texture) {
-		FileSystem& fs = m_app.getEngine().getFileSystem();
-		if (m_composite_tag != &texture) {
-			m_composite_tag = &texture;
-			IAllocator& allocator = m_app.getAllocator();
-			Array<u8> content(allocator);
-			fs.getContentSync(texture.getPath(), Ref(content));
-			m_composite.init(Span(content.begin(), content.end()), texture.getPath().c_str());
-		}
-
-		if (ImGui::CollapsingHeader("Edit")) {
-			static bool show_channels = false;
-			bool same_channels = true;
-			for (TextureComposite::Layer& layer : m_composite.layers) {
-				if (layer.red.path != layer.green.path
-					|| layer.red.path != layer.blue.path
-					|| layer.red.path != layer.alpha.path) 
-				{
-					same_channels = false;
-					break;
-				}
-				if (layer.red.src_channel != 0
-					|| layer.green.src_channel != 1
-					|| layer.blue.src_channel != 2
-					|| layer.alpha.src_channel != 3)
-				{
-					same_channels = false;
-					break;
-				}
-			}
-
-			if (same_channels) {
-				ImGui::Checkbox("Show single channels", &show_channels);
-			}
-			else {
-				show_channels = true;
-			}
-			for (TextureComposite::Layer& layer : m_composite.layers) {
-				const u32 idx = u32(&layer - m_composite.layers.begin());
-				if (ImGui::TreeNodeEx(&layer, 0, "%d", idx)) {
-					if (ImGui::Button("Remove")) {
-						m_composite.layers.erase(idx);
-						ImGui::TreePop();
-						break;
-					}
-
-					char tmp[MAX_PATH_LENGTH];
-					
-					if (show_channels) {
-						copyString(Span(tmp), layer.red.path.c_str());
-						if (m_app.getAssetBrowser().resourceInput("Red", "r", Span(tmp), Texture::TYPE)) {
-							layer.red.path = tmp;
-						}
-						ImGui::Combo("Red source channel", (int*)&layer.red.src_channel, "Red\0Green\0Blue\0Alpha\0");
-
-						copyString(Span(tmp), layer.green.path.c_str());
-						if (m_app.getAssetBrowser().resourceInput("Green", "g", Span(tmp), Texture::TYPE)) {
-							layer.green.path = tmp;
-						}
-						ImGui::Combo("Green source channel", (int*)&layer.green.src_channel, "Red\0Green\0Blue\0Alpha\0");
-
-						copyString(Span(tmp), layer.blue.path.c_str());
-						if (m_app.getAssetBrowser().resourceInput("Blue", "b", Span(tmp), Texture::TYPE)) {
-							layer.blue.path = tmp;
-						}
-						ImGui::Combo("Blue source channel", (int*)&layer.blue.src_channel, "Red\0Green\0Blue\0Alpha\0");
-				
-						copyString(Span(tmp), layer.alpha.path.c_str());
-						if (m_app.getAssetBrowser().resourceInput("Alpha", "a", Span(tmp), Texture::TYPE)) {
-							layer.alpha.path = tmp;
-						}
-						ImGui::Combo("Alpha source channel", (int*)&layer.alpha.src_channel, "Red\0Green\0Blue\0Alpha\0");
-					}
-					else {
-						copyString(Span(tmp), layer.red.path.c_str());
-						if (m_app.getAssetBrowser().resourceInput("Source", "rgba", Span(tmp), Texture::TYPE)) {
-							layer.red.path = tmp;
-							layer.green.path = tmp;
-							layer.blue.path = tmp;
-							layer.alpha.path = tmp;
-							layer.red.src_channel = 0;
-							layer.green.src_channel = 1;
-							layer.blue.src_channel = 2;
-							layer.alpha.src_channel = 3;
-						}
-					}
-
-					ImGui::TreePop();
-				}
-			}
-			if (ImGui::Button("Add layer")) {
-				m_composite.layers.emplace();
-			}
-			if (ImGui::Button("Save")) {
-				const StaticString<MAX_PATH_LENGTH> out_path(fs.getBasePath(), "/", texture.getPath().c_str());
-				OS::OutputFile file;
-				if (file.open(out_path)) {
-					for (TextureComposite::Layer& layer : m_composite.layers) {
-						file << "layer {\n";
-						file << "\tred = { \"" << layer.red.path.c_str() << "\", " << layer.red.src_channel << " },\n";
-						file << "\tgreen = { \"" << layer.green.path.c_str() << "\", " << layer.green.src_channel << " },\n";
-						file << "\tblue = { \"" << layer.blue.path.c_str() << "\", " << layer.blue.src_channel << " },\n";
-						file << "\talpha = { \"" << layer.alpha.path.c_str() << "\", " << layer.alpha.src_channel << " },\n";
-						file << "}\n";
-					}
-					file.close();
-				}
-				else {
-					logError("Renderer") << "Failed to create " << out_path;
-				}
-			}
-			ImGui::SameLine();
-			if (ImGui::Button("Open in external editor")) {
-				m_app.getAssetBrowser().openInExternalEditor(texture.getPath().c_str());
-			}
-		}
-	}
-
-	void onGUI(Span<Resource*> resources) override
-	{
-		if(resources.length() > 1) return;
-
-		auto* texture = static_cast<Texture*>(resources[0]);
-
-		ImGui::LabelText("Size", "%dx%d", texture->width, texture->height);
-		ImGui::LabelText("Mips", "%d", texture->mips);
-		const char* format = "unknown";
-		switch(texture->format) {
-			case gpu::TextureFormat::R8: format = "R8"; break;
-			case gpu::TextureFormat::RGBA8: format = "RGBA8"; break;
-			case gpu::TextureFormat::RGBA16: format = "RGBA16"; break;
-			case gpu::TextureFormat::RGBA16F: format = "RGBA16F"; break;
-			case gpu::TextureFormat::RGBA32F: format = "RGBA32F"; break;
-			case gpu::TextureFormat::R16F: format = "R16F"; break;
-			case gpu::TextureFormat::R16: format = "R16"; break;
-			case gpu::TextureFormat::R32F: format = "R32F"; break;
-			case gpu::TextureFormat::SRGB: format = "SRGB"; break;
-			case gpu::TextureFormat::SRGBA: format = "SRGBA"; break;
-			default: ASSERT(false); break;
-		}
-		ImGui::LabelText("Format", "%s", format);
-		if (texture->handle.isValid()) {
-			ImVec2 texture_size(200, 200);
-			if (texture->width > texture->height) {
-				texture_size.y = texture_size.x * texture->height / texture->width;
-			}
-			else {
-				texture_size.x = texture_size.y * texture->width / texture->height;
-			}
-
-			if (texture != m_texture) {
-				m_texture = texture;
-				PluginManager& plugin_manager = m_app.getEngine().getPluginManager();
-				auto* renderer = (Renderer*)plugin_manager.getPlugin("renderer");
-				renderer->runInRenderThread(this, [](Renderer& r, void* ptr){
-					TexturePlugin* p = (TexturePlugin*)ptr;
-					if (!p->m_texture_view.isValid()) {
-						p->m_texture_view = gpu::allocTextureHandle();
-					}
-					gpu::createTextureView(p->m_texture_view, p->m_texture->handle);
-				});
-			}
-
-			ImGui::Image((void*)(uintptr_t)m_texture_view.value, texture_size);
-
-			if (ImGui::Button("Open")) m_app.getAssetBrowser().openInExternalEditor(texture);
-		}
-
-		if (Path::hasExtension(texture->getPath().c_str(), "ltc")) compositeGUI(*texture);
-		if (ImGui::CollapsingHeader("Import")) {
-			AssetCompiler& compiler = m_app.getAssetCompiler();
-			
-			if(texture->getPath().getHash() != m_meta_res) {
-				m_meta = getMeta(texture->getPath());
-				m_meta_res = texture->getPath().getHash();
-			}
-			
-			ImGui::Checkbox("SRGB", &m_meta.srgb);
-			ImGui::Checkbox("Convert to RAW", &m_meta.convert_to_raw);
-			bool scale_coverage = m_meta.scale_coverage >= 0;
-			if (ImGui::Checkbox("Mipmap scale coverage", &scale_coverage)) {
-				m_meta.scale_coverage *= -1;
-			}
-			if (m_meta.scale_coverage >= 0) {
-				ImGui::SliderFloat("Coverage alpha ref", &m_meta.scale_coverage, 0, 1);
-			}
-			ImGui::Checkbox("Is normalmap", &m_meta.is_normalmap);
-			ImGui::Combo("U Wrap mode", (int*)&m_meta.wrap_mode_u, "Repeat\0Clamp\0");
-			ImGui::Combo("V Wrap mode", (int*)&m_meta.wrap_mode_v, "Repeat\0Clamp\0");
-			ImGui::Combo("W Wrap mode", (int*)&m_meta.wrap_mode_w, "Repeat\0Clamp\0");
-			ImGui::Combo("Filter", (int*)&m_meta.filter, "Linear\0Point\0");
-
-			if (ImGui::Button("Apply")) {
-				const StaticString<512> src("srgb = ", m_meta.srgb ? "true" : "false"
-					, "\nconvert_to_raw = ", m_meta.convert_to_raw ? "true" : "false"
-					, "\nmip_scale_coverage = ", m_meta.scale_coverage
-					, "\nnormalmap = ", m_meta.is_normalmap ? "true" : "false"
-					, "\nwrap_mode_u = \"", toString(m_meta.wrap_mode_u), "\""
-					, "\nwrap_mode_v = \"", toString(m_meta.wrap_mode_v), "\""
-					, "\nwrap_mode_w = \"", toString(m_meta.wrap_mode_w), "\""
-					, "\nfilter = \"", toString(m_meta.filter), "\""
-				);
-				compiler.updateMeta(texture->getPath(), src);
-				if (compiler.compile(texture->getPath())) {
-					texture->getResourceManager().reload(*texture);
-				}
-			}
-		}
-	}
-
-
-	void onResourceUnloaded(Resource* resource) override {}
-	const char* getName() const override { return "Texture"; }
-	ResourceType getResourceType() const override { return Texture::TYPE; }
-
-
-	StudioApp& m_app;
-	Texture* m_texture;
-	gpu::TextureHandle m_texture_view = gpu::INVALID_TEXTURE;
-	JobSystem::SignalHandle m_tile_signal = JobSystem::INVALID_HANDLE;
-	Meta m_meta;
-	u32 m_meta_res = 0;
-	TextureComposite m_composite;
-	void* m_composite_tag = nullptr;
 };
 
 
@@ -2306,9 +2275,9 @@ struct ShaderPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		if (!file.open(path[0] == '/' ? path + 1 : path)) return;
 		
 		IAllocator& allocator = m_app.getAllocator();
-		Array<u8> content(allocator);
+		OutputMemoryStream content(allocator);
 		content.resize((int)file.size());
-		file.read(content.begin(), content.byte_size());
+		file.read(content.getMutableData(), content.size());
 		file.close();
 
 		struct Context {
@@ -2317,7 +2286,7 @@ struct ShaderPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 			u8* content;
 			u32 content_len;
 			int idx;
-		} ctx = { path, this, content.begin(), content.byte_size(), 0 };
+		} ctx = { path, this, content.getMutableData(), (u32)content.size(), 0 };
 
 		lua_pushlightuserdata(L, &ctx);
 		lua_setfield(L, LUA_GLOBALSINDEX, "this");
@@ -2387,7 +2356,7 @@ struct ShaderPlugin final : AssetBrowser::IPlugin, AssetCompiler::IPlugin
 		if(resources.length() > 1) return;
 
 		auto* shader = static_cast<Shader*>(resources[0]);
-		if (ImGui::Button("Open in external editor"))
+		if (ImGui::Button(ICON_FA_EXTERNAL_LINK_ALT "Open externally"))
 		{
 			m_app.getAssetBrowser().openInExternalEditor(shader->getPath().c_str());
 		}
@@ -3508,39 +3477,47 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 		StaticString<MAX_PATH_LENGTH> albedo_path(info.m_dir, "albedo_detail.ltc");
 		StaticString<MAX_PATH_LENGTH> normal_path(info.m_dir, "normal_detail.ltc");
 		StaticString<MAX_PATH_LENGTH> splatmap_path(info.m_dir, "splatmap.tga");
+		StaticString<MAX_PATH_LENGTH> splatmap_meta_path(info.m_dir, "splatmap.tga.meta");
 		OS::OutputFile file;
 		if (!file.open(hm_path))
 		{
 			logError("Editor") << "Failed to create heightmap " << hm_path;
 			return false;
 		}
-		else
-		{
-			RawTextureHeader header;
-			header.width = size;
-			header.height = size;
-			header.depth = 1;
-			header.is_array = false;
-			header.channel_type = RawTextureHeader::ChannelType::U16;
-			header.channels_count = 1;
-			file.write(&header, sizeof(header));
-			u16 tmp = 0;
-			for (int i = 0; i < size * size; ++i) {
-				file.write(&tmp, sizeof(tmp));
-			}
-			file.close();
+		RawTextureHeader header;
+		header.width = size;
+		header.height = size;
+		header.depth = 1;
+		header.is_array = false;
+		header.channel_type = RawTextureHeader::ChannelType::U16;
+		header.channels_count = 1;
+		file.write(&header, sizeof(header));
+		u16 tmp = 0;
+		for (int i = 0; i < size * size; ++i) {
+			file.write(&tmp, sizeof(tmp));
 		}
+		file.close();
 		
-		if (!file.open(splatmap_path)) {
-			logError("Editor") << "Failed to create texture " << splatmap_path;
+		if (!file.open(splatmap_meta_path)) {
+			logError("Editor") << "Failed to create meta " << splatmap_meta_path;
 			OS::deleteFile(hm_path);
 			return false;
 		}
 
-		Array<u8> splatmap(app.getAllocator());
+		file << "filter = \"point\"";
+		file.close();
+
+		if (!file.open(splatmap_path)) {
+			logError("Editor") << "Failed to create texture " << splatmap_path;
+			OS::deleteFile(splatmap_meta_path);
+			OS::deleteFile(hm_path);
+			return false;
+		}
+
+		OutputMemoryStream splatmap(app.getAllocator());
 		splatmap.resize(size * size * 4);
-		memset(splatmap.begin(), 0, size * size * 4);
-		if (!Texture::saveTGA(&file, size, size, gpu::TextureFormat::RGBA8, splatmap.begin(), true, Path(splatmap_path), app.getAllocator())) {
+		memset(splatmap.getMutableData(), 0, size * size * 4);
+		if (!Texture::saveTGA(&file, size, size, gpu::TextureFormat::RGBA8, splatmap.data(), true, Path(splatmap_path), app.getAllocator())) {
 			logError("Editor") << "Failed to create texture " << splatmap_path;
 			OS::deleteFile(hm_path);
 			return false;
@@ -3551,20 +3528,21 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 			logError("Editor") << "Failed to create texture " << albedo_path;
 			OS::deleteFile(hm_path);
 			OS::deleteFile(splatmap_path);
+			OS::deleteFile(splatmap_meta_path);
 			return false;
 		}
 		file << R"#(
 			layer {
-				red = { "/textures/common/white.tga", 0 },
-				green = { "/textures/common/white.tga", 1 },
-				blue = { "/textures/common/white.tga", 2 },
-				alpha = { "/textures/common/white.tga", 3 }
+				red = { "/textures/common/red.tga", 0 },
+				green = { "/textures/common/red.tga", 1 },
+				blue = { "/textures/common/red.tga", 2 },
+				alpha = { "/textures/common/red.tga", 3 }
 			}
 			layer {
-				red = { "/textures/common/white.tga", 0 },
-				green = { "/textures/common/white.tga", 1 },
-				blue = { "/textures/common/white.tga", 2 },
-				alpha = { "/textures/common/white.tga", 3 }
+				red = { "/textures/common/green.tga", 0 },
+				green = { "/textures/common/green.tga", 1 },
+				blue = { "/textures/common/green.tga", 2 },
+				alpha = { "/textures/common/green.tga", 3 }
 			}
 		)#";
 		file.close();
@@ -3574,6 +3552,7 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 			OS::deleteFile(albedo_path);
 			OS::deleteFile(hm_path);
 			OS::deleteFile(splatmap_path);
+			OS::deleteFile(splatmap_meta_path);
 			return false;
 		}
 		file << R"#(
@@ -3599,6 +3578,7 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 			OS::deleteFile(albedo_path);
 			OS::deleteFile(hm_path);
 			OS::deleteFile(splatmap_path);
+			OS::deleteFile(splatmap_meta_path);
 			return false;
 		}
 
@@ -3612,6 +3592,9 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 			texture "splatmap.tga"
 			uniform("Detail distance", 50.000000)
 			uniform("Detail scale", 1.000000)
+			uniform("Noise UV scale", 0.200000)
+			uniform("Detail diffusion", 0.500000)
+			uniform("Detail power", 16.000000)
 		)#";
 
 		file.close();
@@ -3654,7 +3637,7 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 			if (create_entity)
 			{
 				EntityRef entity = editor.addEntity();
-				editor.selectEntities(&entity, 1, false);
+				editor.selectEntities(Span(&entity, 1), false);
 			}
 			if (editor.getSelectedEntities().empty()) return;
 			EntityRef entity = editor.getSelectedEntities()[0];
@@ -3666,7 +3649,7 @@ struct AddTerrainComponentPlugin final : StudioApp::IAddComponentPlugin
 
 			if (!create_empty)
 			{
-				editor.setProperty(TERRAIN_TYPE, -1, "Material", Span(&entity, 1), Path(buf));
+				editor.setProperty(TERRAIN_TYPE, "", -1, "Material", Span(&entity, 1), Path(buf));
 			}
 
 			ImGui::CloseCurrentPopup();
@@ -3697,19 +3680,19 @@ struct StudioAppPlugin : StudioApp::IPlugin
 	{
 		IAllocator& allocator = m_app.getAllocator();
 
-		m_app.registerComponent("camera", "Render / Camera");
-		m_app.registerComponent("environment", "Render / Environment");
-		m_app.registerComponent("light_probe_grid", "Render / Light probe grid");
-		m_app.registerComponent("model_instance", "Render / Mesh", Model::TYPE, "Source");
-		m_app.registerComponent("particle_emitter",	"Render / Particle emitter", ParticleEmitterResource::TYPE, "Resource");
-		m_app.registerComponent("point_light", "Render / Point light");
-		m_app.registerComponent("decal", "Render / Decal");
-		m_app.registerComponent("bone_attachment", "Render / Bone attachment");
-		m_app.registerComponent("environment_probe", "Render / Environment probe");
-		m_app.registerComponent("text_mesh", "Render / Text 3D", FontResource::TYPE, "Font");
+		m_app.registerComponent(ICON_FA_CAMERA, "camera", "Render / Camera");
+		m_app.registerComponent(ICON_FA_GLOBE, "environment", "Render / Environment");
+		m_app.registerComponent("", "light_probe_grid", "Render / Light probe grid");
+		m_app.registerComponent(ICON_FA_CUBES, "model_instance", "Render / Mesh", Model::TYPE, "Source");
+		m_app.registerComponent(ICON_FA_SMOG, "particle_emitter",	"Render / Particle emitter", ParticleEmitterResource::TYPE, "Resource");
+		m_app.registerComponent(ICON_FA_LIGHTBULB, "point_light", "Render / Point light");
+		m_app.registerComponent("", "decal", "Render / Decal");
+		m_app.registerComponent(ICON_FA_BONE, "bone_attachment", "Render / Bone attachment");
+		m_app.registerComponent("", "environment_probe", "Render / Environment probe");
+		m_app.registerComponent(ICON_FA_ALIGN_JUSTIFY, "text_mesh", "Render / Text 3D", FontResource::TYPE, "Font");
 
 		m_add_terrain_plugin = LUMIX_NEW(allocator, AddTerrainComponentPlugin)(m_app);
-		m_app.registerComponent("terrain", *m_add_terrain_plugin);
+		m_app.registerComponent(ICON_FA_MAP, "terrain", *m_add_terrain_plugin);
 
 		AssetCompiler& asset_compiler = m_app.getAssetCompiler();
 
@@ -3734,6 +3717,7 @@ struct StudioAppPlugin : StudioApp::IPlugin
 		asset_compiler.addPlugin(*m_material_plugin, material_exts);
 
 		m_model_plugin = LUMIX_NEW(allocator, ModelPlugin)(m_app);
+		m_model_plugin->m_texture_plugin = m_texture_plugin;
 		const char* model_exts[] = {"fbx", nullptr};
 		asset_compiler.addPlugin(*m_model_plugin, model_exts);
 
@@ -3749,10 +3733,12 @@ struct StudioAppPlugin : StudioApp::IPlugin
 		asset_browser.addPlugin(*m_shader_plugin);
 		asset_browser.addPlugin(*m_texture_plugin);
 
+		m_model_properties_plugin = LUMIX_NEW(allocator, ModelPropertiesPlugin)(m_app);
 		m_env_probe_plugin = LUMIX_NEW(allocator, EnvironmentProbePlugin)(m_app);
 		m_light_probe_grid_plugin = LUMIX_NEW(allocator, LightProbeGridPlugin)(m_app);
 		m_terrain_plugin = LUMIX_NEW(allocator, TerrainPlugin)(m_app);
 		PropertyGrid& property_grid = m_app.getPropertyGrid();
+		property_grid.addPlugin(*m_model_properties_plugin);
 		property_grid.addPlugin(*m_env_probe_plugin);
 		property_grid.addPlugin(*m_light_probe_grid_plugin);
 		property_grid.addPlugin(*m_terrain_plugin);
@@ -3962,10 +3948,12 @@ struct StudioAppPlugin : StudioApp::IPlugin
 
 		PropertyGrid& property_grid = m_app.getPropertyGrid();
 
+		property_grid.removePlugin(*m_model_properties_plugin);
 		property_grid.removePlugin(*m_env_probe_plugin);
 		property_grid.removePlugin(*m_light_probe_grid_plugin);
 		property_grid.removePlugin(*m_terrain_plugin);
 
+		LUMIX_DELETE(allocator, m_model_properties_plugin);
 		LUMIX_DELETE(allocator, m_env_probe_plugin);
 		LUMIX_DELETE(allocator, m_light_probe_grid_plugin);
 		LUMIX_DELETE(allocator, m_terrain_plugin);
@@ -3989,6 +3977,7 @@ struct StudioAppPlugin : StudioApp::IPlugin
 	FontPlugin* m_font_plugin;
 	TexturePlugin* m_texture_plugin;
 	ShaderPlugin* m_shader_plugin;
+	ModelPropertiesPlugin* m_model_properties_plugin;
 	EnvironmentProbePlugin* m_env_probe_plugin;
 	LightProbeGridPlugin* m_light_probe_grid_plugin;
 	TerrainPlugin* m_terrain_plugin;

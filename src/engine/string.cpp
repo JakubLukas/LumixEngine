@@ -265,6 +265,7 @@ String& String::cat(const char* rhs)
 	ASSERT(rhs < c_str() || rhs >= c_str() + m_size);
 	
 	const int len = stringLength(rhs);
+	if(len == 0) return *this;
 	const int old_s = m_size;
 	resize(len + old_s);
 	memcpy(getData() + old_s, rhs, len + 1);
@@ -346,6 +347,15 @@ bool endsWith(const char* str, const char* substr)
 	return equalStrings(str + len - len2, substr);
 }
 
+bool contains(const char* haystack, char needle)
+{
+	const char* c = haystack;
+	while (*c) {
+		if (*c == needle) return true;
+		++c;
+	}
+	return false;
+}
 
 const char* stristr(const char* haystack, const char* needle)
 {

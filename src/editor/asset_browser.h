@@ -50,19 +50,20 @@ public:
 	void update();
 	bool onDropFile(const char* path);
 	void selectResource(const Path& resource, bool record_history, bool additive);
-	bool resourceInput(const char* label, const char* str_id, Span<char> buf, ResourceType type);
+	bool resourceInput(const char* str_id, Span<char> buf, ResourceType type);
 	void addPlugin(IPlugin& plugin);
 	void removePlugin(IPlugin& plugin);
 	void openInExternalEditor(Resource* resource) const;
 	void openInExternalEditor(const char* path) const;
 	bool resourceList(Span<char> buf, Ref<u32> selected_idx, ResourceType type, float height, bool can_create_new) const;
+	void tile(const Path& path, bool selected);
 	OutputMemoryStream* beginSaveResource(Resource& resource);
 	void endSaveResource(Resource& resource, OutputMemoryStream& file, bool success);
 
 public:
 	bool m_is_open;
 	float m_left_column_width = 120;
-	static const int TILE_SIZE = 64;
+	static const int TILE_SIZE = 96;
 
 private:
 	struct FileInfo
@@ -74,12 +75,17 @@ private:
 		bool create_called = false;
 	};
 
+	struct ImmediateTile : FileInfo{
+		u32 gc_counter;
+	};
+
 private:
+	void refreshLabels();
 	void dirColumn();
 	void fileColumn();
 	void detailsGUI();
 	void createTile(FileInfo& tile, const char* out_path);
-	void thumbnail(FileInfo& tile);
+	void thumbnail(FileInfo& tile, float scale);
 	int getThumbnailIndex(int i, int j, int columns) const;
 	void doFilter();
 	void breadcrumbs();
@@ -96,8 +102,11 @@ private:
 	StaticString<MAX_PATH_LENGTH> m_dir;
 	Array<StaticString<MAX_PATH_LENGTH> > m_subdirs;
 	Array<FileInfo> m_file_infos;
+	Array<ImmediateTile> m_immediate_tiles;
 	Array<int> m_filtered_file_infos;
 	Array<Path> m_history;
+	EntityPtr m_dropped_entity = INVALID_ENTITY;
+	char m_prefab_name[MAX_PATH_LENGTH] = "";
 	int m_history_index;
 	HashMap<ResourceType, IPlugin*> m_plugins;
 	Array<Resource*> m_selected_resources;
@@ -106,6 +115,8 @@ private:
 	Path m_wanted_resource;
 	bool m_is_focus_requested;
 	bool m_show_thumbnails;
+	bool m_show_subresources;
+	float m_thumbnail_size = 1.f;
 	Action* m_back_action;
 	Action* m_forward_action;
 };

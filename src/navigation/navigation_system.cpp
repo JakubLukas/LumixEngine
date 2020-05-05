@@ -72,6 +72,9 @@ struct NavigationSystem final : IPlugin
 		s_instance = nullptr;
 	}
 
+	u32 getVersion() const override { return 0; }
+	void serialize(OutputMemoryStream& stream) const override {}
+	bool deserialize(u32 version, InputMemoryStream& stream) override { return version == 0; }
 
 	static void detourFree(void* ptr)
 	{
@@ -118,14 +121,14 @@ void NavigationSystem::registerProperties()
 	using namespace Reflection;
 	static auto navigation_scene = scene("navigation",
 		functions(
-			function(LUMIX_FUNC(NavigationScene::load))
+			LUMIX_FUNC(NavigationScene::load)
 		),
 		component("navmesh_zone", 
 			var_property("Extents", &NavigationScene::getZone, &NavmeshZone::extents)
 		),
 		component("navmesh_agent",
 			functions(
-				function(LUMIX_FUNC(NavigationScene::navigate))
+				LUMIX_FUNC(NavigationScene::navigate)
 			),
 			property("Radius", LUMIX_PROP(NavigationScene, AgentRadius),
 				MinAttribute(0)),

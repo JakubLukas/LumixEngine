@@ -1,5 +1,4 @@
 #include <imgui/imgui.h>
-#include <imgui/IconsFontAwesome4.h>
 
 #include "studio_app.h"
 #include "asset_browser.h"
@@ -62,12 +61,12 @@ struct TarHeader {
 };
 
 
-#define NO_ICON "       "
+#define NO_ICON "     "
 
 
 struct LuaPlugin : StudioApp::GUIPlugin
 {
-	LuaPlugin(StudioApp& app, const char* src, const char* filename)
+	LuaPlugin(StudioApp& app, Span<const char> src, const char* filename)
 		: app(app)
 	{
 		L = lua_newthread(app.getEngine().getState());						 // [thread]
@@ -84,7 +83,7 @@ struct LuaPlugin : StudioApp::GUIPlugin
 		lua_pushvalue(L, LUA_GLOBALSINDEX);
 		lua_setfield(L, -2, "__index"); // [env]
 
-		bool errors = luaL_loadbuffer(L, src, stringLength(src), filename) != 0; // [env, func]
+		bool errors = luaL_loadbuffer(L, src.m_begin, src.length(), filename) != 0; // [env, func]
 
 		lua_pushvalue(L, -2); // [env, func, env]
 		lua_setfenv(L, -2);   // function's environment [env, func]
@@ -157,7 +156,6 @@ struct StudioAppImpl final : StudioApp
 {
 	StudioAppImpl()
 		: m_is_entity_list_open(true)
-		, m_is_save_as_dialog_open(false)
 		, m_finished(false)
 		, m_deferred_game_mode_exit(false)
 		, m_profiler_ui(nullptr)
@@ -176,6 +174,7 @@ struct StudioAppImpl final : StudioApp
 		, m_plugins(m_allocator)
 		, m_add_cmp_plugins(m_allocator)
 		, m_component_labels(m_allocator)
+		, m_component_icons(m_allocator)
 		, m_confirm_load(false)
 		, m_confirm_new(false)
 		, m_confirm_exit(false)
@@ -201,7 +200,6 @@ struct StudioAppImpl final : StudioApp
 			case OS::Event::Type::FOCUS: break;
 			case OS::Event::Type::MOUSE_BUTTON: {
 				ImGuiIO& io = ImGui::GetIO();
-				m_editor->setToggleSelection(io.KeyCtrl);
 				m_editor->getView().setSnapMode(io.KeyShift, io.KeyCtrl);
 				if (handle_input || !event.mouse_button.down) {
 					io.MouseDown[(int)event.mouse_button.button] = event.mouse_button.down;
@@ -260,6 +258,10 @@ struct StudioAppImpl final : StudioApp
 					io.KeyShift = OS::isKeyDown(OS::Keycode::SHIFT);
 					io.KeyCtrl = OS::isKeyDown(OS::Keycode::CTRL);
 					io.KeyAlt = OS::isKeyDown(OS::Keycode::MENU);
+
+					if (event.key.down && event.key.keycode == OS::Keycode::F2) {
+						m_is_f2_pressed = true;
+					}
 					checkShortcuts();
 				}
 				break;
@@ -301,6 +303,7 @@ struct StudioAppImpl final : StudioApp
 
 		Profiler::frame();
 		m_events.clear();
+		m_is_f2_pressed = false;
 	}
 
 
@@ -388,23 +391,22 @@ struct StudioAppImpl final : StudioApp
 		m_set_pivot_action = LUMIX_NEW(m_editor->getAllocator(), Action)("Set custom pivot",
 			"Set Custom Pivot",
 			"set_custom_pivot",
+			"",
 			OS::Keycode::K,
-			OS::Keycode::INVALID,
-			OS::Keycode::INVALID);
+			0);
 		m_set_pivot_action->is_global = false;
 		addAction(m_set_pivot_action);
 
 		m_reset_pivot_action = LUMIX_NEW(m_editor->getAllocator(), Action)("Reset pivot",
 			"Reset pivot",
 			"reset_pivot",
-			OS::Keycode::LSHIFT,
+			"",
 			OS::Keycode::K,
-			OS::Keycode::INVALID);
+			(u8)Action::Modifiers::SHIFT);
 		m_reset_pivot_action->is_global = false;
 		addAction(m_reset_pivot_action);
 
 		setStudioApp();
-		loadIcons();
 		loadSettings();
 		loadUniverseFromCommandLine();
 		findLuaPlugins("plugins/lua/");
@@ -422,20 +424,13 @@ struct StudioAppImpl final : StudioApp
 	{
 		ImGuiIO& io = ImGui::GetIO();
 		if (io.WantSaveIniSettings) {
-			size_t size;
-			const char* data = ImGui::SaveIniSettingsToMemory(&size);
-			FileSystem& fs = m_engine->getFileSystem();
-			OS::OutputFile file;
-			if (fs.open("imgui.ini", Ref(file))) {
-				file.write(data ,size);
-				file.close();
-			}
+			const char* data = ImGui::SaveIniSettingsToMemory();
+			m_settings.m_imgui_state = data;
 		}
 
 		if (m_watched_plugin.watcher) FileSystemWatcher::destroy(m_watched_plugin.watcher);
 
 		saveSettings();
-		unloadIcons();
 
 		while (m_engine->getFileSystem().hasWork()) {
 			m_engine->getFileSystem().processCallbacks();
@@ -499,6 +494,12 @@ struct StudioAppImpl final : StudioApp
 		LUMIX_DELETE(m_allocator, node);
 	}
 
+	const char* getComponentIcon(ComponentType cmp_type) const override
+	{
+		auto iter = m_component_icons.find(cmp_type);
+		if (iter == m_component_icons.end()) return "";
+		return iter.value().c_str();
+	}
 
 	const char* getComponentTypeName(ComponentType cmp_type) const override
 	{
@@ -575,7 +576,8 @@ struct StudioAppImpl final : StudioApp
 	}
 
 
-	void registerComponent(const char* type,
+	void registerComponent(const char* icon,
+		const char* type,
 		const char* label,
 		ResourceType resource_type,
 		const char* property) override
@@ -597,7 +599,7 @@ struct StudioAppImpl final : StudioApp
 					if (create_entity)
 					{
 						EntityRef entity = editor->addEntity();
-						editor->selectEntities(&entity, 1, false);
+						editor->selectEntities(Span(&entity, 1), false);
 					}
 
 					const Array<EntityRef>& selected_entites = editor->getSelectedEntities();
@@ -605,6 +607,7 @@ struct StudioAppImpl final : StudioApp
 					if (!create_empty)
 					{
 						editor->setProperty(type,
+							"",
 							-1,
 							property,
 							editor->getSelectedEntities(),
@@ -639,17 +642,22 @@ struct StudioAppImpl final : StudioApp
 		addPlugin(*plugin);
 
 		m_component_labels.insert(plugin->type, String(label, m_allocator));
+		if (icon && icon[0]) {
+			m_component_icons.insert(plugin->type, String(icon, m_allocator));
+		}
 	}
 
-
-	void registerComponent(const char* id, IAddComponentPlugin& plugin) override
+	void registerComponent(const char* icon, const char* id, IAddComponentPlugin& plugin) override
 	{
 		addPlugin(plugin);
 		m_component_labels.insert(Reflection::getComponentType(id), String(plugin.getLabel(), m_allocator));
+		if (icon && icon[0]) {
+			m_component_icons.insert(Reflection::getComponentType(id), String(icon, m_allocator));
+		}
 	}
 
 
-	void registerComponent(const char* type, const char* label) override
+	void registerComponent(const char* icon, const char* type, const char* label) override
 	{
 		struct Plugin final : IAddComponentPlugin
 		{
@@ -663,7 +671,7 @@ struct StudioAppImpl final : StudioApp
 					if (create_entity)
 					{
 						EntityRef entity = editor->addEntity();
-						editor->selectEntities(&entity, 1, false);
+						editor->selectEntities(Span(&entity, 1), false);
 					}
 
 					editor->addComponent(editor->getSelectedEntities(), type);
@@ -688,6 +696,9 @@ struct StudioAppImpl final : StudioApp
 		addPlugin(*plugin);
 
 		m_component_labels.insert(plugin->type, String(label, m_allocator));
+		if (icon && icon[0]) {
+			m_component_icons.insert(plugin->type, String(icon, m_allocator));
+		}
 	}
 
 
@@ -721,34 +732,19 @@ struct StudioAppImpl final : StudioApp
 		io.MousePos.x = (float)cp.x;
 		io.MousePos.y = (float)cp.y;
 
+		const ImGuiMouseCursor imgui_cursor = ImGui::GetMouseCursor();
 		ImGui::NewFrame();
-		ImGui::PushFont(m_font);
-	}
-
-
-	float showMainToolbar(float menu_height)
-	{
-		if (m_toolbar_actions.empty())
-		{
-			ImGui::SetCursorPosY(menu_height);
-			return menu_height;
-		}
-
-		auto frame_padding = ImGui::GetStyle().FramePadding;
-		float padding = frame_padding.y * 2;
-		ImVec2 toolbar_size(ImGui::GetIO().DisplaySize.x, 24 + padding);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
-		const ImVec2 pos = ImGui::GetMainViewport()->Pos;
-		if (ImGui::BeginToolbar("main_toolbar", ImVec2(pos.x + 1, pos.y + menu_height), toolbar_size))
-		{
-			for (auto* action : m_toolbar_actions)
-			{
-				action->toolbarButton();
+		if (!m_cursor_captured) {
+			switch (imgui_cursor) {
+				case ImGuiMouseCursor_Arrow: OS::setCursor(OS::CursorType::DEFAULT); break;
+				case ImGuiMouseCursor_ResizeNS: OS::setCursor(OS::CursorType::SIZE_NS); break;
+				case ImGuiMouseCursor_ResizeEW: OS::setCursor(OS::CursorType::SIZE_WE); break;
+				case ImGuiMouseCursor_ResizeNWSE: OS::setCursor(OS::CursorType::SIZE_NWSE); break;
+				case ImGuiMouseCursor_TextInput: OS::setCursor(OS::CursorType::TEXT_INPUT); break;
+				default: OS::setCursor(OS::CursorType::DEFAULT); break;
 			}
 		}
-		ImGui::EndToolbar();
-		ImGui::PopStyleVar();
-		return menu_height + 24 + padding;
+		ImGui::PushFont(m_font);
 	}
 
 
@@ -764,7 +760,9 @@ struct StudioAppImpl final : StudioApp
 			if (main_win_rect.width > 0 && main_win_rect.height > 0) {
 				ImGui::SetNextWindowSize(ImVec2((float)main_win_rect.width, (float)main_win_rect.height));
 				ImGui::SetNextWindowPos(ImVec2((float)p.x, (float)p.y));
+			    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 				ImGui::Begin("MainDockspace", nullptr, flags);
+				ImGui::PopStyleVar();
 				ImGuiID dockspace_id = ImGui::GetID("MyDockspace");
 				ImGui::DockSpace(dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_KeepAliveOnly);
 				ImGui::End();
@@ -775,11 +773,11 @@ struct StudioAppImpl final : StudioApp
 			if (main_win_rect.width > 0 && main_win_rect.height > 0) {
 				ImGui::SetNextWindowSize(ImVec2((float)main_win_rect.width, (float)main_win_rect.height));
 				ImGui::SetNextWindowPos(ImVec2((float)p.x, (float)p.y));
+			    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 				ImGui::Begin("MainDockspace", nullptr, flags);
-				float menu_height = showMainMenu();
-				showMainToolbar(menu_height);
+				ImGui::PopStyleVar();
+				mainMenu();
 				ImGuiID dockspace_id = ImGui::GetID("MyDockspace");
-				ImGui::Dummy(ImVec2(2, 2));
 				ImGui::DockSpace(dockspace_id, ImVec2(0, 0));
 				ImGui::End();
 			
@@ -953,15 +951,15 @@ struct StudioAppImpl final : StudioApp
 		m_editor->addComponent(entities, env_cmp_type);
 		m_editor->addComponent(entities, lua_script_cmp_type);
 		const float intensity = 3;
-		m_editor->setProperty(env_cmp_type, -1, "Intensity", Span(&env, 1), intensity);
+		m_editor->setProperty(env_cmp_type, "", -1, "Intensity", Span(&env, 1), intensity);
 		const float indirect_intensity = 0.3f;
-		m_editor->setProperty(env_cmp_type, -1, "Indirect intensity", Span(&env, 1), indirect_intensity);
+		m_editor->setProperty(env_cmp_type, "", -1, "Indirect intensity", Span(&env, 1), indirect_intensity);
 		Quat rot;
 		rot.fromEuler(Vec3(degreesToRadians(45.f), 0, 0));
 		m_editor->setEntitiesRotations(&env, &rot, 1);
 		const ComponentUID cmp = m_editor->getUniverse()->getComponent(env, lua_script_cmp_type);
 		m_editor->addArrayPropertyItem(cmp, "scripts");
-		m_editor->setProperty(lua_script_cmp_type, 0, "Path", entities, Path("pipelines/sky.lua"));
+		m_editor->setProperty(lua_script_cmp_type, "scripts", 0, "Path", entities, Path("pipelines/sky.lua"));
 	}
 
 
@@ -996,6 +994,7 @@ struct StudioAppImpl final : StudioApp
 						}
 						m_engine->getFileSystem().setBasePath(dir);
 						extractBundled();
+						m_editor->loadProject();
 						scanUniverses();
 					}
 				}
@@ -1066,11 +1065,16 @@ struct StudioAppImpl final : StudioApp
 	static void getShortcut(const Action& action, Span<char> buf)
 	{
 		buf[0] = 0;
-		for (u32 i = 0; i < lengthOf(action.shortcut); ++i) {
+		
+		if (action.modifiers & (u8)Action::Modifiers::CTRL) catString(buf, "CTRL ");
+		if (action.modifiers & (u8)Action::Modifiers::SHIFT) catString(buf, "SHIFT ");
+		if (action.modifiers & (u8)Action::Modifiers::ALT) catString(buf, "ALT ");
+
+		if (action.shortcut != OS::Keycode::INVALID) {
 			char tmp[64];
-			OS::getKeyName(action.shortcut[i], Span(tmp));
+			OS::getKeyName(action.shortcut, Span(tmp));
 			if (tmp[0] == 0) return;
-			if (i > 0) catString(buf, " - ");
+			catString(buf, " ");
 			catString(buf, tmp);
 		}
 	}
@@ -1108,23 +1112,24 @@ struct StudioAppImpl final : StudioApp
 
 	void onSaveAsDialogGUI()
 	{
-		if (!m_is_save_as_dialog_open) return;
-
-		if (ImGui::Begin("Save Universe As", &m_is_save_as_dialog_open))
+		if (m_save_as_request) {
+			ImGui::OpenPopup("Save Universe As");
+			m_save_as_request = false;
+		}
+		if (ImGui::BeginPopupModal("Save Universe As"))
 		{
 			static char name[64] = "";
-			ImGui::InputText("Name", name, lengthOf(name));
-			if (ImGui::Button("Save"))
-			{
-				m_is_save_as_dialog_open = false;
+			ImGuiEx::Label("Name");
+			ImGui::InputText("##name", name, lengthOf(name));
+			if (ImGui::Button(ICON_FA_SAVE "Save")) {
 				setTitle(name);
 				m_editor->saveUniverse(name, true);
 				scanUniverses();
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("Close")) m_is_save_as_dialog_open = false;
+			if (ImGui::Button(ICON_FA_TIMES "Cancel")) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
 		}
-		ImGui::End();
 	}
 
 
@@ -1136,7 +1141,7 @@ struct StudioAppImpl final : StudioApp
 			return;
 		}
 
-		m_is_save_as_dialog_open = true;
+		m_save_as_request = true;
 	}
 
 
@@ -1178,14 +1183,14 @@ struct StudioAppImpl final : StudioApp
 	}
 
 	Gizmo::Config& getGizmoConfig() { return m_gizmo_config; }
+	
+	void setCursorCaptured(bool captured) override { m_cursor_captured = captured; }
 
 	void undo() { m_editor->undo(); }
 	void redo() { m_editor->redo(); }
 	void copy() { m_editor->copyEntities(); }
 	void paste() { m_editor->pasteEntities(); }
 	void duplicate() { m_editor->duplicateEntities(); }
-	bool isOrbitCamera() { return m_editor->getView().isOrbitCamera(); }
-	void toggleOrbitCamera() { m_editor->getView().setOrbitCamera(!m_editor->getView().isOrbitCamera()); }
 	void setTopView() { m_editor->getView().setTopView(); }
 	void setFrontView() { m_editor->getView().setFrontView(); }
 	void setSideView() { m_editor->getView().setSideView(); }
@@ -1252,13 +1257,17 @@ struct StudioAppImpl final : StudioApp
 		{
 			Path::normalize(tmp, Span(filename));
 			const char* base_path = m_engine->getFileSystem().getBasePath();
+			auto& selected_entities = m_editor->getSelectedEntities();
+			if (selected_entities.size() != 1) return;
+
+			EntityRef entity = selected_entities[0];
 			if (startsWith(filename, base_path))
 			{
-				m_editor->getPrefabSystem().savePrefab(Path(filename + stringLength(base_path)));
+				m_editor->getPrefabSystem().savePrefab(entity, Path(filename + stringLength(base_path)));
 			}
 			else
 			{
-				m_editor->getPrefabSystem().savePrefab(Path(filename));
+				m_editor->getPrefabSystem().savePrefab(entity, Path(filename));
 			}
 		}
 	}
@@ -1341,9 +1350,9 @@ struct StudioAppImpl final : StudioApp
 
 
 	template <void (StudioAppImpl::*Func)()>
-	Action& addAction(const char* label_short, const char* label_long, const char* name)
+	Action& addAction(const char* label_short, const char* label_long, const char* name, const char* font_icon = "")
 	{
-		auto* a = LUMIX_NEW(m_editor->getAllocator(), Action)(label_short, label_long, name);
+		auto* a = LUMIX_NEW(m_editor->getAllocator(), Action)(label_short, label_long, name, font_icon);
 		a->func.bind<Func>(this);
 		addAction(a);
 		return *a;
@@ -1354,12 +1363,11 @@ struct StudioAppImpl final : StudioApp
 	void addAction(const char* label_short,
 		const char* label_long,
 		const char* name,
-		OS::Keycode shortcut0,
-		OS::Keycode shortcut1,
-		OS::Keycode shortcut2)
+		const char* font_icon,
+		OS::Keycode shortcut,
+		u8 modifiers)
 	{
-		auto* a =
-			LUMIX_NEW(m_editor->getAllocator(), Action)(label_short, label_long, name, shortcut0, shortcut1, shortcut2);
+		auto* a = LUMIX_NEW(m_editor->getAllocator(), Action)(label_short, label_long, name, font_icon, shortcut, modifiers);
 		a->func.bind<Func>(this);
 		addAction(a);
 	}
@@ -1411,8 +1419,12 @@ struct StudioAppImpl final : StudioApp
 	void onCreateEntityWithComponentGUI()
 	{
 		doMenuItem(*getAction("createEntity"), true);
-		ImGui::Separator();
+		ImGui::SetNextItemWidth(-20);
 		ImGui::InputTextWithHint("##filter", "Filter", m_component_filter, sizeof(m_component_filter));
+		ImGui::SameLine();
+		if (ImGuiEx::IconButton(ICON_FA_TIMES, "Clear filter")) {
+			m_component_filter[0] = '\0';
+		}
 		showAddComponentNode(m_add_cmp_root.child, m_component_filter);
 	}
 
@@ -1423,7 +1435,7 @@ struct StudioAppImpl final : StudioApp
 
 		const auto& selected_entities = m_editor->getSelectedEntities();
 		bool is_any_entity_selected = !selected_entities.empty();
-		if (ImGui::BeginMenu(ICON_FA_PLUS_SQUARE_O "Create"))
+		if (ImGui::BeginMenu(ICON_FA_PLUS_SQUARE "Create"))
 		{
 			onCreateEntityWithComponentGUI();
 			ImGui::EndMenu();
@@ -1450,7 +1462,6 @@ struct StudioAppImpl final : StudioApp
 		doMenuItem(*getAction("paste"), m_editor->canPasteEntities());
 		doMenuItem(*getAction("duplicate"), is_any_entity_selected);
 		ImGui::Separator();
-		doMenuItem(*getAction("orbitCamera"), is_any_entity_selected || m_editor->getView().isOrbitCamera());
 		doMenuItem(*getAction("setTranslateGizmoMode"), true);
 		doMenuItem(*getAction("setRotateGizmoMode"), true);
 		doMenuItem(*getAction("setScaleGizmoMode"), true);
@@ -1474,7 +1485,14 @@ struct StudioAppImpl final : StudioApp
 		doMenuItem(*getAction("newUniverse"), true);
 		if (ImGui::BeginMenu(NO_ICON "Open"))
 		{
+			ImGui::Dummy(ImVec2(200, 1)); // to forece minimal menu size
+			ImGui::SetNextItemWidth(-20);
 			ImGui::InputTextWithHint("##filter", "Filter", m_open_filter, sizeof(m_open_filter));
+			ImGui::SameLine();
+			if (ImGuiEx::IconButton(ICON_FA_TIMES, "Clear filter")) {
+				m_open_filter[0] = '\0';
+			}
+
 			for (auto& univ : m_universes)
 			{
 				if ((m_open_filter[0] == '\0' || stristr(univ.data, m_open_filter)) && ImGui::MenuItem(univ.data))
@@ -1520,11 +1538,11 @@ struct StudioAppImpl final : StudioApp
 	{
 		if (!ImGui::BeginMenu("View")) return;
 
-		ImGui::MenuItem(ICON_FA_CUBES "Asset browser", nullptr, &m_asset_browser->m_is_open);
+		ImGui::MenuItem(ICON_FA_IMAGES "Asset browser", nullptr, &m_asset_browser->m_is_open);
 		doMenuItem(*getAction("entityList"), true);
-		ImGui::MenuItem(ICON_FA_RSS "Log", nullptr, &m_log_ui->m_is_open);
-		ImGui::MenuItem(ICON_FA_AREA_CHART "Profiler", nullptr, &m_profiler_ui->m_is_open);
-		ImGui::MenuItem(ICON_FA_SLIDERS "Properties", nullptr, &m_property_grid->m_is_open);
+		ImGui::MenuItem(ICON_FA_COMMENT_ALT "Log", nullptr, &m_log_ui->m_is_open);
+		ImGui::MenuItem(ICON_FA_CHART_AREA "Profiler", nullptr, &m_profiler_ui->m_is_open);
+		ImGui::MenuItem(ICON_FA_INFO_CIRCLE "Inspector", nullptr, &m_property_grid->m_is_open);
 		doMenuItem(*getAction("settings"), true);
 		ImGui::Separator();
 		for (Action* action : m_window_actions)
@@ -1535,7 +1553,7 @@ struct StudioAppImpl final : StudioApp
 	}
 
 
-	float showMainMenu()
+	void mainMenu()
 	{
 		if (m_confirm_exit)
 		{
@@ -1593,8 +1611,8 @@ struct StudioAppImpl final : StudioApp
 			ImGui::EndPopup();
 		}
 
-		float menu_height = 0;
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 4));
 		if (ImGui::BeginMainMenuBar())
 		{
 			fileMenu();
@@ -1602,9 +1620,16 @@ struct StudioAppImpl final : StudioApp
 			entityMenu();
 			toolsMenu();
 			viewMenu();
+			ImGui::PopStyleVar(2);
+
+			float w = ImGui::GetWindowContentRegionWidth() * 0.5f - m_toolbar_actions.size() * 15 - ImGui::GetCursorPosX();
+			ImGui::Dummy(ImVec2(w, ImGui::GetTextLineHeight()));
+			for (auto* action : m_toolbar_actions) {
+				action->toolbarButton(m_big_icon_font);
+			}
 
 			StaticString<200> stats("");
-			if (m_engine->getFileSystem().hasWork()) stats << "Loading... | ";
+			if (m_engine->getFileSystem().hasWork()) stats << ICON_FA_HOURGLASS_HALF "Loading... | ";
 			stats << "FPS: ";
 			stats << (u32)(m_fps + 0.5f);
 			if (!isFocused()) stats << " - inactive window";
@@ -1615,23 +1640,21 @@ struct StudioAppImpl final : StudioApp
 			if (m_log_ui->getUnreadErrorCount() == 1)
 			{
 				ImGui::SameLine(ImGui::GetContentRegionMax().x - stats_size.x);
-				auto error_stats_size = ImGui::CalcTextSize("1 error | ");
+				auto error_stats_size = ImGui::CalcTextSize(ICON_FA_EXCLAMATION_TRIANGLE "1 error | ");
 				ImGui::SameLine(ImGui::GetContentRegionMax().x - stats_size.x - error_stats_size.x);
-				ImGui::TextColored(ImVec4(1, 0, 0, 1), "1 error | ");
+				ImGui::TextColored(ImVec4(1, 0, 0, 1), ICON_FA_EXCLAMATION_TRIANGLE "1 error | ");
 			}
 			else if (m_log_ui->getUnreadErrorCount() > 1)
 			{
-				StaticString<50> error_stats("", m_log_ui->getUnreadErrorCount(), " errors | ");
+				StaticString<50> error_stats(ICON_FA_EXCLAMATION_TRIANGLE, m_log_ui->getUnreadErrorCount(), " errors | ");
 				ImGui::SameLine(ImGui::GetContentRegionMax().x - stats_size.x);
 				auto error_stats_size = ImGui::CalcTextSize(error_stats);
 				ImGui::SameLine(ImGui::GetContentRegionMax().x - stats_size.x - error_stats_size.x);
 				ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s", (const char*)error_stats);
 			}
-			menu_height = ImGui::GetWindowSize().y;
 			ImGui::EndMainMenuBar();
 		}
-		ImGui::PopStyleVar();
-		return menu_height;
+		ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().FramePadding.y * 2));
 	}
 
 
@@ -1646,7 +1669,34 @@ struct StudioAppImpl final : StudioApp
 		bool has_child = universe->getFirstChild(entity).isValid();
 		if (!has_child) flags = ImGuiTreeNodeFlags_Leaf;
 		if (selected) flags |= ImGuiTreeNodeFlags_Selected;
-		bool node_open = ImGui::TreeNodeEx(buffer, flags);
+		
+		bool node_open;
+		if (m_renaming_entity == entity) {
+			node_open = ImGui::TreeNodeEx((void*)(intptr_t)entity.index, flags, "%s", "");
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(-1);
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, 0});
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, 0);
+			if (m_set_rename_focus) {
+				ImGui::SetKeyboardFocusHere();
+				m_set_rename_focus = false;
+			}
+			if (ImGui::InputText("##renamed_val", m_rename_buf, sizeof(m_rename_buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
+				m_editor->setEntityName((EntityRef)m_renaming_entity, m_rename_buf);
+				m_renaming_entity = INVALID_ENTITY;
+			}
+			if (ImGui::IsItemDeactivated()) {
+				m_renaming_entity = INVALID_ENTITY;
+			}
+			m_set_rename_focus = false;
+			ImGui::PopStyleVar(2);
+			ImGui::PopStyleColor();
+		}
+		else {
+			node_open = ImGui::TreeNodeEx((void*)(intptr_t)entity.index, flags, "%s", buffer);
+		}
+		
 		if (ImGui::IsMouseReleased(1) && ImGui::IsItemHovered()) ImGui::OpenPopup("entity_context_menu");
 		if (ImGui::BeginPopup("entity_context_menu"))
 		{
@@ -1670,7 +1720,7 @@ struct StudioAppImpl final : StudioApp
 		}
 		else {
 			if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-				m_editor->selectEntities(&entity, 1, true);
+				m_editor->selectEntities(Span(&entity, 1), ImGui::GetIO().KeyCtrl);
 			}
 		}
 		if (ImGui::BeginDragDropTarget())
@@ -1697,6 +1747,15 @@ struct StudioAppImpl final : StudioApp
 			{
 				showHierarchy((EntityRef)e_ptr, selected_entities);
 			}
+			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && m_is_f2_pressed) {
+				m_renaming_entity = selected_entities.empty() ? INVALID_ENTITY : selected_entities[0];
+				if (m_renaming_entity.isValid()) {
+					m_set_rename_focus = true;
+					const char* name = m_editor->getUniverse()->getEntityName(selected_entities[0]);
+					copyString(m_rename_buf, name);
+				}
+			}
+
 			ImGui::TreePop();
 		}
 	}
@@ -1707,11 +1766,13 @@ struct StudioAppImpl final : StudioApp
 		if (!m_is_edit_cam_transform_ui_open) return;
 		if (ImGui::Begin("Edit camera")) {
 			Viewport vp = m_editor->getView().getViewport();
-			if (ImGui::DragScalarN("Position", ImGuiDataType_Double, &vp.pos.x, 3, 1.f)) {
+			ImGuiEx::Label("Position");
+			if (ImGui::DragScalarN("##pos", ImGuiDataType_Double, &vp.pos.x, 3, 1.f)) {
 				m_editor->getView().setViewport(vp);
 			}
 			Vec3 angles = vp.rot.toEuler();
-			if (ImGui::DragFloat3("Rotation", &angles.x, 0.01f)) {
+			ImGuiEx::Label("Rotation");
+			if (ImGui::DragFloat3("##rot", &angles.x, 0.01f)) {
 				vp.rot.fromEuler(angles);
 				m_editor->getView().setViewport(vp);
 			}
@@ -1726,10 +1787,15 @@ struct StudioAppImpl final : StudioApp
 		const Array<EntityRef>& entities = m_editor->getSelectedEntities();
 		static char filter[64] = "";
 		if (!m_is_entity_list_open) return;
-		if (ImGui::Begin("Entity List", &m_is_entity_list_open))
+		if (ImGui::Begin(ICON_FA_STREAM "Hierarchy##hierarchy", &m_is_entity_list_open))
 		{
 			auto* universe = m_editor->getUniverse();
+			ImGui::SetNextItemWidth(-20);
 			ImGui::InputTextWithHint("##filter", "Filter", filter, sizeof(filter));
+			ImGui::SameLine();
+			if (ImGuiEx::IconButton(ICON_FA_TIMES, "Clear filter")) {
+				filter[0] = '\0';
+			}
 
 			if (ImGui::BeginChild("entities"))
 			{
@@ -1759,7 +1825,7 @@ struct StudioAppImpl final : StudioApp
 						bool selected = entities.indexOf(e_ref) >= 0;
 						if (ImGui::Selectable(buffer, &selected))
 						{
-							m_editor->selectEntities(&e_ref, 1, true);
+							m_editor->selectEntities(Span(&e_ref, 1), ImGui::GetIO().KeyCtrl);
 						}
 						if (ImGui::BeginDragDropSource())
 						{
@@ -1801,7 +1867,7 @@ struct StudioAppImpl final : StudioApp
 	}
 
 
-	void saveSettings()
+	void saveSettings() override
 	{
 		m_settings.m_is_asset_browser_open = m_asset_browser->m_is_open;
 		m_settings.m_asset_browser_left_column_width = m_asset_browser->m_left_column_width;
@@ -1820,21 +1886,29 @@ struct StudioAppImpl final : StudioApp
 
 	ImFont* addFontFromFile(const char* path, float size, bool merge_icons) {
 		FileSystem& fs = m_engine->getFileSystem();
-		Array<u8> data(m_allocator);
+		OutputMemoryStream data(m_allocator);
 		if (!fs.getContentSync(Path(path), Ref(data))) return nullptr;
 		ImGuiIO& io = ImGui::GetIO();
 		ImFontConfig cfg;
+		copyString(cfg.Name, path);
 		cfg.FontDataOwnedByAtlas = false;
-		auto font = io.Fonts->AddFontFromMemoryTTF(data.begin(), data.byte_size(), size, &cfg);
+		auto font = io.Fonts->AddFontFromMemoryTTF((void*)data.data(), (i32)data.size(), size, &cfg);
 		if(merge_icons) {
 			ImFontConfig config;
+			copyString(config.Name, "editor/fonts/fa-regular-400.ttf");
 			config.MergeMode = true;
 			config.FontDataOwnedByAtlas = false;
-			config.GlyphMinAdvanceX = 20.0f; // Use if you want to make the icon monospaced
+			config.GlyphMinAdvanceX = size; // Use if you want to make the icon monospaced
 			static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
-			Array<u8> icons_data(m_allocator);
-			if (fs.getContentSync(Path("editor/fonts/fontawesome-webfont.ttf"), Ref(icons_data))) {
-				ImFont* icons_font = io.Fonts->AddFontFromMemoryTTF(icons_data.begin(), icons_data.byte_size(), size * 0.75f, &config, icon_ranges);
+			OutputMemoryStream icons_data(m_allocator);
+			if (fs.getContentSync(Path("editor/fonts/fa-regular-400.ttf"), Ref(icons_data))) {
+				ImFont* icons_font = io.Fonts->AddFontFromMemoryTTF((void*)icons_data.data(), (i32)icons_data.size(), size * 0.75f, &config, icon_ranges);
+				ASSERT(icons_font);
+			}
+			copyString(config.Name, "editor/fonts/fa-solid-900.ttf");
+			icons_data.clear();
+			if (fs.getContentSync(Path("editor/fonts/fa-solid-900.ttf"), Ref(icons_data))) {
+				ImFont* icons_font = io.Fonts->AddFontFromMemoryTTF((void*)icons_data.data(), (i32)icons_data.size(), size * 0.75f, &config, icon_ranges);
 				ASSERT(icons_font);
 			}
 		}
@@ -1934,9 +2008,9 @@ struct StudioAppImpl final : StudioApp
 	{
 		logInfo("Editor") << "Initializing imgui...";
 		ImGuiIO& io = ImGui::GetIO();
-		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
+		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
 		io.IniFilename = nullptr;
-		io.BackendFlags = ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_RendererHasViewports;
+		io.BackendFlags = ImGuiBackendFlags_PlatformHasViewports | ImGuiBackendFlags_RendererHasViewports | ImGuiBackendFlags_HasMouseCursors;
 
 		initIMGUIPlatformIO();
 
@@ -1944,13 +2018,27 @@ struct StudioAppImpl final : StudioApp
 		float font_scale = dpi / 96.f;
 		FileSystem& fs = m_engine->getFileSystem();
 		
-		Array<u8> ini_data(m_allocator);
-		if (fs.getContentSync(Path("imgui.ini"), Ref(ini_data))) {
-			ImGui::LoadIniSettingsFromMemory((const char*)ini_data.begin(), ini_data.size());
-		}
+		ImGui::LoadIniSettingsFromMemory(m_settings.m_imgui_state.c_str());
 
-		m_font = addFontFromFile("editor/fonts/OpenSans-Regular.ttf", (float)m_settings.m_font_size * font_scale, true);
-		m_bold_font = addFontFromFile("editor/fonts/OpenSans-Bold.ttf", (float)m_settings.m_font_size * font_scale, true);
+		m_font = addFontFromFile("editor/fonts/NotoSans-Regular.ttf", (float)m_settings.m_font_size * font_scale, true);
+		m_bold_font = addFontFromFile("editor/fonts/NotoSans-Bold.ttf", (float)m_settings.m_font_size * font_scale, true);
+		
+		OutputMemoryStream data(m_allocator);
+		if (fs.getContentSync(Path("editor/fonts/fa-solid-900.ttf"), Ref(data))) {
+			const float size = (float)m_settings.m_font_size * font_scale * 1.25f;
+			ImFontConfig cfg;
+			copyString(cfg.Name, "editor/fonts/fa-solid-900.ttf");
+			cfg.FontDataOwnedByAtlas = false;
+			cfg.GlyphMinAdvanceX = size; // Use if you want to make the icon monospaced
+			static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
+			m_big_icon_font = io.Fonts->AddFontFromMemoryTTF((void*)data.data(), (i32)data.size(), size, &cfg, icon_ranges);
+			cfg.MergeMode = true;
+			copyString(cfg.Name, "editor/fonts/fa-regular-400.ttf");
+			if (fs.getContentSync(Path("editor/fonts/fa-regular-400.ttf"), Ref(data))) {
+				ImFont* icons_font = io.Fonts->AddFontFromMemoryTTF((void*)data.data(), (i32)data.size(), size, &cfg, icon_ranges);
+				ASSERT(icons_font);
+			}
+		}
 
 		if (m_font && m_bold_font) {
 			m_font->DisplayOffset.y = 0;
@@ -1958,7 +2046,7 @@ struct StudioAppImpl final : StudioApp
 		}
 		else {
 			OS::messageBox(
-				"Could not open editor/fonts/OpenSans-Regular.ttf or editor/fonts/OpenSans-Bold.ttf\n"
+				"Could not open editor/fonts/NotoSans-Regular.ttf or editor/fonts/NotoSans-Bold.ttf\n"
 				"It very likely means that data are not bundled with\n"
 				"the exe and the exe is not in the correct directory.\n"
 				"The program will eventually crash!"
@@ -2044,51 +2132,49 @@ struct StudioAppImpl final : StudioApp
 
 	void addActions()
 	{
-		addAction<&StudioAppImpl::newUniverse>(ICON_FA_PLUS "New", "New universe", "newUniverse");
+		addAction<&StudioAppImpl::newUniverse>(ICON_FA_PLUS "New", "New universe", "newUniverse", ICON_FA_PLUS);
 		addAction<&StudioAppImpl::save>(
-			ICON_FA_FLOPPY_O "Save", "Save universe", "save", OS::Keycode::LCTRL, OS::Keycode::S, OS::Keycode::INVALID);
+			ICON_FA_SAVE "Save", "Save universe", "save", ICON_FA_SAVE, OS::Keycode::S, (u8)Action::Modifiers::CTRL);
 		addAction<&StudioAppImpl::saveAs>(
-			NO_ICON "Save As", "Save universe as", "saveAs", OS::Keycode::LCTRL, OS::Keycode::LSHIFT, OS::Keycode::S);
+			NO_ICON "Save As", "Save universe as", "saveAs", "", OS::Keycode::S, (u8)Action::Modifiers::CTRL | (u8)Action::Modifiers::SHIFT);
 		addAction<&StudioAppImpl::exit>(
-			ICON_FA_SIGN_OUT "Exit", "Exit Studio", "exit", OS::Keycode::LCTRL, OS::Keycode::X, OS::Keycode::INVALID);
+			ICON_FA_SIGN_OUT_ALT "Exit", "Exit Studio", "exit", ICON_FA_SIGN_OUT_ALT, OS::Keycode::X, (u8)Action::Modifiers::CTRL);
 		addAction<&StudioAppImpl::redo>(
-			ICON_FA_REPEAT "Redo", "Redo scene action", "redo", OS::Keycode::LCTRL, OS::Keycode::LSHIFT, OS::Keycode::Z);
+			ICON_FA_REDO "Redo", "Redo scene action", "redo", ICON_FA_REDO, OS::Keycode::Z, (u8)Action::Modifiers::CTRL | (u8)Action::Modifiers::SHIFT);
 		addAction<&StudioAppImpl::undo>(
-			ICON_FA_UNDO "Undo", "Undo scene action", "undo", OS::Keycode::LCTRL, OS::Keycode::Z, OS::Keycode::INVALID);
+			ICON_FA_UNDO "Undo", "Undo scene action", "undo", ICON_FA_UNDO, OS::Keycode::Z, (u8)Action::Modifiers::CTRL);
 		addAction<&StudioAppImpl::copy>(
-			ICON_FA_CLIPBOARD "Copy", "Copy entity", "copy", OS::Keycode::LCTRL, OS::Keycode::C, OS::Keycode::INVALID);
+			ICON_FA_CLIPBOARD "Copy", "Copy entity", "copy", ICON_FA_CLIPBOARD, OS::Keycode::C, (u8)Action::Modifiers::CTRL);
 		addAction<&StudioAppImpl::paste>(
-			NO_ICON "Paste", "Paste entity", "paste", OS::Keycode::LCTRL, OS::Keycode::V, OS::Keycode::INVALID);
+			ICON_FA_PASTE "Paste", "Paste entity", "paste", ICON_FA_PASTE, OS::Keycode::V, (u8)Action::Modifiers::CTRL);
 		addAction<&StudioAppImpl::duplicate>(
-			ICON_FA_FILES_O "Duplicate", "Duplicate entity", "duplicate", OS::Keycode::LCTRL, OS::Keycode::D, OS::Keycode::INVALID);
-		addAction<&StudioAppImpl::toggleOrbitCamera>(NO_ICON "Orbit camera", "Orbit camera", "orbitCamera")
-			.is_selected.bind<&StudioAppImpl::isOrbitCamera>(this);
-		addAction<&StudioAppImpl::setTranslateGizmoMode>(ICON_FA_ARROWS "Translate", "Set translate mode", "setTranslateGizmoMode")
+			ICON_FA_CLONE "Duplicate", "Duplicate entity", "duplicate", ICON_FA_CLONE, OS::Keycode::D, (u8)Action::Modifiers::CTRL);
+		addAction<&StudioAppImpl::setTranslateGizmoMode>(ICON_FA_ARROWS_ALT "Translate", "Set translate mode", "setTranslateGizmoMode", ICON_FA_ARROWS_ALT)
 			.is_selected.bind<&Gizmo::Config::isTranslateMode>(&getGizmoConfig());
-		addAction<&StudioAppImpl::setRotateGizmoMode>(ICON_FA_REPEAT "Rotate", "Set rotate mode", "setRotateGizmoMode")
+		addAction<&StudioAppImpl::setRotateGizmoMode>(ICON_FA_UNDO "Rotate", "Set rotate mode", "setRotateGizmoMode", ICON_FA_UNDO)
 			.is_selected.bind<&Gizmo::Config::isRotateMode>(&getGizmoConfig());
-		addAction<&StudioAppImpl::setScaleGizmoMode>(NO_ICON "Scale", "Set scale mode", "setScaleGizmoMode")
+		addAction<&StudioAppImpl::setScaleGizmoMode>(ICON_FA_EXPAND_ALT "Scale", "Set scale mode", "setScaleGizmoMode", ICON_FA_EXPAND_ALT)
 			.is_selected.bind<&Gizmo::Config::isScaleMode>(&getGizmoConfig());
 		addAction<&StudioAppImpl::setTopView>(NO_ICON "Top", "Set top camera view", "viewTop");
 		addAction<&StudioAppImpl::setFrontView>(NO_ICON "Front", "Set front camera view", "viewFront");
 		addAction<&StudioAppImpl::setSideView>(NO_ICON "Side", "Set side camera view", "viewSide");
-		addAction<&StudioAppImpl::setLocalCoordSystem>(NO_ICON "Local", "Set local transform system", "setLocalCoordSystem")
+		addAction<&StudioAppImpl::setLocalCoordSystem>(ICON_FA_HOME "Local", "Set local transform system", "setLocalCoordSystem", ICON_FA_HOME)
 			.is_selected.bind<&Gizmo::Config::isLocalCoordSystem>(&getGizmoConfig());
-		addAction<&StudioAppImpl::setGlobalCoordSystem>(ICON_FA_GLOBE "Global", "Set global transform system", "setGlobalCoordSystem")
+		addAction<&StudioAppImpl::setGlobalCoordSystem>(ICON_FA_GLOBE "Global", "Set global transform system", "setGlobalCoordSystem", ICON_FA_GLOBE)
 			.is_selected.bind<&Gizmo::Config::isGlobalCoordSystem>(&getGizmoConfig());
 
-		addAction<&StudioAppImpl::addEntity>(ICON_FA_PLUS_SQUARE_O "Create empty", "Create empty entity", "createEntity");
-		addAction<&StudioAppImpl::destroySelectedEntity>(ICON_FA_MINUS_SQUARE_O "Destroy",
+		addAction<&StudioAppImpl::addEntity>(ICON_FA_PLUS_SQUARE "Create empty", "Create empty entity", "createEntity", ICON_FA_PLUS_SQUARE);
+		addAction<&StudioAppImpl::destroySelectedEntity>(ICON_FA_MINUS_SQUARE "Destroy",
 			"Destroy entity",
 			"destroyEntity",
+			ICON_FA_MINUS_SQUARE,
 			OS::Keycode::DEL,
-			OS::Keycode::INVALID,
-			OS::Keycode::INVALID);
-		addAction<&StudioAppImpl::savePrefab>(ICON_FA_FLOPPY_O "Save prefab", "Save selected entities as prefab", "savePrefab");
-		addAction<&StudioAppImpl::makeParent>(ICON_FA_OBJECT_GROUP "Make parent", "Make entity parent", "makeParent");
-		addAction<&StudioAppImpl::unparent>(ICON_FA_OBJECT_UNGROUP "Unparent", "Unparent entity", "unparent");
+			0);
+		addAction<&StudioAppImpl::savePrefab>(ICON_FA_SAVE "Save prefab", "Save selected entities as prefab", "savePrefab", ICON_FA_SAVE);
+		addAction<&StudioAppImpl::makeParent>(ICON_FA_OBJECT_GROUP "Make parent", "Make entity parent", "makeParent", ICON_FA_OBJECT_GROUP);
+		addAction<&StudioAppImpl::unparent>(ICON_FA_OBJECT_UNGROUP "Unparent", "Unparent entity", "unparent", ICON_FA_OBJECT_UNGROUP);
 
-		addAction<&StudioAppImpl::toggleGameMode>(ICON_FA_PLAY "Game Mode", "Toggle game mode", "toggleGameMode")
+		addAction<&StudioAppImpl::toggleGameMode>(ICON_FA_PLAY "Game Mode", "Toggle game mode", "toggleGameMode", ICON_FA_PLAY)
 			.is_selected.bind<&WorldEditor::isGameMode>(m_editor);
 		addAction<&StudioAppImpl::autosnapDown>(NO_ICON "Autosnap down", "Toggle autosnap down", "autosnapDown")
 			.is_selected.bind<&Gizmo::Config::isAutosnapDown>(&getGizmoConfig());
@@ -2096,13 +2182,13 @@ struct StudioAppImpl final : StudioApp
 		addAction<&StudioAppImpl::setEditCamTransform>(NO_ICON "Camera transform", "Set camera transformation", "setEditCamTransform");
 		addAction<&StudioAppImpl::copyViewTransform>(NO_ICON "Copy view transform", "Copy view transform", "copyViewTransform");
 		addAction<&StudioAppImpl::lookAtSelected>(NO_ICON "Look at selected", "Look at selected entity", "lookAtSelected");
-		addAction<&StudioAppImpl::toggleAssetBrowser>(ICON_FA_CUBES "Asset Browser", "Toggle asset browser", "assetBrowser")
+		addAction<&StudioAppImpl::toggleAssetBrowser>(ICON_FA_IMAGES "Asset Browser", "Toggle asset browser", "assetBrowser", ICON_FA_IMAGES)
 			.is_selected.bind<&StudioAppImpl::isAssetBrowserOpen>(this);
-		addAction<&StudioAppImpl::toggleEntityList>(ICON_FA_LIST "Entity List", "Toggle entity list", "entityList")
+		addAction<&StudioAppImpl::toggleEntityList>(ICON_FA_STREAM "Hierarchy", "Toggle hierarchy", "entityList", ICON_FA_STREAM)
 			.is_selected.bind<&StudioAppImpl::isEntityListOpen>(this);
-		addAction<&StudioAppImpl::toggleSettings>(ICON_FA_COGS "Settings", "Toggle settings UI", "settings")
+		addAction<&StudioAppImpl::toggleSettings>(ICON_FA_COG "Settings", "Toggle settings UI", "settings", ICON_FA_COG)
 			.is_selected.bind<&StudioAppImpl::areSettingsOpen>(this);
-		addAction<&StudioAppImpl::showPackDataDialog>(ICON_FA_FILE_ARCHIVE_O "Pack data", "Pack data", "pack_data");
+		addAction<&StudioAppImpl::showPackDataDialog>(ICON_FA_ARCHIVE "Pack data", "Pack data", "pack_data", ICON_FA_ARCHIVE);
 	}
 
 
@@ -2409,20 +2495,25 @@ struct StudioAppImpl final : StudioApp
 	}
 
 
-	void savePrefabAs(const char* path) { m_editor->getPrefabSystem().savePrefab(Path(path)); }
+	void savePrefabAs(const char* path) {
+		auto& selected_entities = m_editor->getSelectedEntities();
+		if (selected_entities.size() != 1) return;
+
+		EntityRef entity = selected_entities[0];
+		m_editor->getPrefabSystem().savePrefab(entity, Path(path)); 
+	}
 
 
 	void destroyEntity(EntityRef e) { m_editor->destroyEntities(&e, 1); }
 
 
-	void selectEntity(EntityRef e) { m_editor->selectEntities(&e, 1, false); }
+	void selectEntity(EntityRef e) { m_editor->selectEntities(Span(&e, 1), false); }
 
 
 	EntityRef createEntity() { return m_editor->addEntity(); }
 
 	void createComponent(EntityRef e, int type)
 	{
-		m_editor->selectEntities(&e, 1, false);
 		m_editor->addComponent(Span(&e, 1), {type});
 	}
 
@@ -2449,7 +2540,7 @@ struct StudioAppImpl final : StudioApp
 			}
 
 			int val = (int)lua_tointeger(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<u32>& prop) override
@@ -2458,7 +2549,7 @@ struct StudioAppImpl final : StudioApp
 			if (!lua_isnumber(L, -1)) return;
 
 			const u32 val = (u32)lua_tointeger(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<float>& prop) override
@@ -2467,7 +2558,7 @@ struct StudioAppImpl final : StudioApp
 			if (!lua_isnumber(L, -1)) return;
 
 			float val = (float)lua_tonumber(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<Vec2>& prop) override
@@ -2476,7 +2567,7 @@ struct StudioAppImpl final : StudioApp
 			if (!LuaWrapper::isType<Vec2>(L, -1)) return;
 
 			const Vec2 val = LuaWrapper::toType<Vec2>(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<Vec3>& prop) override
@@ -2485,7 +2576,7 @@ struct StudioAppImpl final : StudioApp
 			if (!LuaWrapper::isType<Vec3>(L, -1)) return;
 
 			const Vec3 val = LuaWrapper::toType<Vec3>(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<IVec3>& prop) override
@@ -2494,7 +2585,7 @@ struct StudioAppImpl final : StudioApp
 			if (!LuaWrapper::isType<IVec3>(L, -1)) return;
 
 			const IVec3 val = LuaWrapper::toType<IVec3>(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<Vec4>& prop) override
@@ -2503,7 +2594,7 @@ struct StudioAppImpl final : StudioApp
 			if (!LuaWrapper::isType<Vec4>(L, -1)) return;
 
 			const Vec4 val = LuaWrapper::toType<Vec4>(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 		
 		void visit(const Reflection::Property<const char*>& prop) override
@@ -2512,7 +2603,7 @@ struct StudioAppImpl final : StudioApp
 			if (!lua_isstring(L, -1)) return;
 
 			const char* str = lua_tostring(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), str);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), str);
 		}
 
 
@@ -2522,7 +2613,7 @@ struct StudioAppImpl final : StudioApp
 			if (!lua_isstring(L, -1)) return;
 
 			const char* str = lua_tostring(L, -1);
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), str);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), str);
 		}
 
 
@@ -2532,7 +2623,7 @@ struct StudioAppImpl final : StudioApp
 			if (!lua_isboolean(L, -1)) return;
 
 			bool val = lua_toboolean(L, -1) != 0;
-			editor->setProperty(cmp_type, 0, prop.name, Span(&entity, 1), val);
+			editor->setProperty(cmp_type, "", 0, prop.name, Span(&entity, 1), val);
 		}
 
 		void visit(const Reflection::Property<EntityPtr>& prop) override { notSupported(prop); }
@@ -2563,7 +2654,7 @@ struct StudioAppImpl final : StudioApp
 		WorldEditor& editor = *studio->m_editor;
 		editor.beginCommandGroup(crc32("createEntityEx"));
 		EntityRef e = editor.addEntity();
-		editor.selectEntities(&e, 1, false);
+		editor.selectEntities(Span(&e, 1), false);
 
 		lua_pushvalue(L, 2);
 		lua_pushnil(L);
@@ -2961,22 +3052,13 @@ struct StudioAppImpl final : StudioApp
 		StaticString<MAX_PATH_LENGTH> path(dir, filename);
 		OS::InputFile file;
 
-		if (m_engine->getFileSystem().open(path, Ref(file)))
-		{
-			const int size = (int)file.size();
-			Array<u8> src(m_engine->getAllocator());
-			src.resize(size + 1);
-			file.read(src.begin(), size);
-			src[size] = 0;
-
-			LuaPlugin* plugin = LUMIX_NEW(m_editor->getAllocator(), LuaPlugin)(*this, (const char*)src.begin(), filename);
+		OutputMemoryStream src(m_engine->getAllocator());
+		if (m_engine->getFileSystem().getContentSync(Path(path), Ref(src))) {
+			LuaPlugin* plugin = LUMIX_NEW(m_editor->getAllocator(), LuaPlugin)(*this, Span((const char*)src.data(), (u32)src.size()), filename);
 			addPlugin(*plugin);
-
-			file.close();
 		}
-		else
-		{
-			logWarning("Editor") << "Failed to open " << path;
+		else {
+			logWarning("Editor") << "Failed to load " << path;
 		}
 	}
 
@@ -3058,81 +3140,23 @@ struct StudioAppImpl final : StudioApp
 	}
 
 
-	void unloadIcons()
-	{
-		auto& render_interface = *getRenderInterface();
-		for (auto* action : m_actions)
-		{
-			render_interface.unloadTexture(action->icon);
-		}
-	}
-
-
-	void loadIcons()
-	{
-		logInfo("Editor") << "Loading icons...";
-		RenderInterface& render_interface = *getRenderInterface();
-		FileSystem& fs = m_engine->getFileSystem();
-		for (auto* action : m_actions)
-		{
-			char tmp[MAX_PATH_LENGTH];
-			action->getIconPath(Span(tmp));
-			if (fs.fileExists(tmp))
-			{
-				action->icon = render_interface.loadTexture(Path(tmp));
-			}
-			else
-			{
-				action->icon = nullptr;
-			}
-		}
-	}
-
-
 	void checkShortcuts()
 	{
 		if (ImGui::IsAnyItemActive()) return;
 		GUIPlugin* plugin = getFocusedPlugin();
-		u32 pressed_modifiers = 0;
-		if (OS::isKeyDown(OS::Keycode::SHIFT)) pressed_modifiers |= 1;
-		if (OS::isKeyDown(OS::Keycode::CTRL)) pressed_modifiers |= 2;
-		if (OS::isKeyDown(OS::Keycode::MENU)) pressed_modifiers |= 4;
+		u8 pressed_modifiers = 0;
+		if (OS::isKeyDown(OS::Keycode::SHIFT)) pressed_modifiers |= (u8)Action::Modifiers::SHIFT;
+		if (OS::isKeyDown(OS::Keycode::CTRL)) pressed_modifiers |= (u8)Action::Modifiers::CTRL;
+		if (OS::isKeyDown(OS::Keycode::MENU)) pressed_modifiers |= (u8)Action::Modifiers::ALT;
 
 		for (Action* a : m_actions) {
-			if (!a->is_global || a->shortcut[0] == OS::Keycode::INVALID) continue;
+			if (!a->is_global || (a->shortcut == OS::Keycode::INVALID && a->modifiers ==0)) continue;
 			if (a->plugin != plugin) continue;
+			if (a->shortcut != OS::Keycode::INVALID && !OS::isKeyDown(a->shortcut)) continue;
+			if (a->modifiers != pressed_modifiers) continue;
 
-			u32 action_modifiers = 0;
-			for (u32 i = 0; i < lengthOf(a->shortcut) + 1; ++i)
-			{
-				if ((i == lengthOf(a->shortcut) || a->shortcut[i] == OS::Keycode::INVALID) &&
-					action_modifiers == pressed_modifiers)
-				{
-					a->func.invoke();
-					return;
-				}
-
-				if (i == lengthOf(a->shortcut)) break;
-				if (a->shortcut[i] == OS::Keycode::INVALID) break;
-
-				if (!OS::isKeyDown(a->shortcut[i])) break;
-				switch (a->shortcut[i]) {
-					case OS::Keycode::LSHIFT:
-					case OS::Keycode::RSHIFT:
-					case OS::Keycode::SHIFT:
-						action_modifiers |= 1;
-						break;
-					case OS::Keycode::CTRL:
-					case OS::Keycode::LCTRL:
-					case OS::Keycode::RCTRL:
-						action_modifiers |= 2; 
-						break;
-					case OS::Keycode::MENU:
-						action_modifiers |= 4;
-						break;
-					default: break;
-				}
-			}
+			a->func.invoke();
+			return;
 		}
 	}
 
@@ -3145,7 +3169,8 @@ struct StudioAppImpl final : StudioApp
 		return *m_editor;
 	}
 
-
+	
+	ImFont* getBigIconFont() override { return m_big_icon_font; }
 	ImFont* getBoldFont() override { return m_bold_font; }
 
 	struct WindowToDestroy {
@@ -3174,10 +3199,13 @@ struct StudioAppImpl final : StudioApp
 	Array<StaticString<MAX_PATH_LENGTH>> m_universes;
 	AddCmpTreeNode m_add_cmp_root;
 	HashMap<ComponentType, String> m_component_labels;
+	HashMap<ComponentType, String> m_component_icons;
 	WorldEditor* m_editor;
 	Action* m_set_pivot_action;
 	Action* m_reset_pivot_action;
 	Gizmo::Config m_gizmo_config;
+	bool m_save_as_request = false;
+	bool m_cursor_captured = false;
 	bool m_confirm_exit;
 	bool m_confirm_load;
 	bool m_confirm_new;
@@ -3220,9 +3248,13 @@ struct StudioAppImpl final : StudioApp
 	bool m_is_welcome_screen_open;
 	bool m_is_pack_data_dialog_open;
 	bool m_is_entity_list_open;
-	bool m_is_save_as_dialog_open;
+	EntityPtr m_renaming_entity = INVALID_ENTITY;
+	bool m_set_rename_focus = false;
+	char m_rename_buf[256];
+	bool m_is_f2_pressed = false;
 	bool m_is_edit_cam_transform_ui_open = false;
 	ImFont* m_font;
+	ImFont* m_big_icon_font;
 	ImFont* m_bold_font;
 
 	struct WatchedPlugin

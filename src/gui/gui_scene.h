@@ -8,6 +8,7 @@ namespace Lumix
 {
 
 namespace gpu { struct TextureHandle; }
+namespace OS { enum class CursorType : u32; }
 
 template <typename T> struct DelegateList;
 
@@ -38,13 +39,15 @@ struct GUIScene : IScene
 		struct IAllocator& allocator);
 	static void destroyInstance(GUIScene* scene);
 
-	virtual void render(struct Pipeline& pipeline, const struct Vec2& canvas_size) = 0;
+	virtual void render(struct Pipeline& pipeline, const struct Vec2& canvas_size, bool is_main) = 0;
 	virtual IVec2 getCursorPosition() = 0;
 
 	virtual bool hasGUI(EntityRef entity) const = 0;
-	virtual Rect getRectOnCanvas(EntityPtr entity, const Vec2& canva_size) const = 0;
+	virtual Rect getRectEx(EntityPtr entity, const Vec2& canvas_size) const = 0;
 	virtual Rect getRect(EntityRef entity) const = 0;
-	virtual EntityPtr getRectAt(const Vec2& pos, const Vec2& canvas_size) const = 0;
+	virtual EntityPtr getRectAtEx(const Vec2& pos, const Vec2& canvas_size, EntityPtr limit) const = 0;
+	virtual EntityPtr getRectAt(const Vec2& pos) const = 0;
+	virtual bool isOver(const Vec2& pos, EntityRef e) = 0;
 
 	virtual void enableRect(EntityRef entity, bool enable) = 0;
 	virtual bool isRectEnabled(EntityRef entity) = 0;
@@ -70,10 +73,10 @@ struct GUIScene : IScene
 	virtual float getRectBottomRelative(EntityRef entity) = 0;
 	virtual void setRectBottomRelative(EntityRef entity, float value) = 0;
 
-	virtual struct Vec4 getButtonNormalColorRGBA(EntityRef entity) = 0;
-	virtual void setButtonNormalColorRGBA(EntityRef entity, const Vec4& color) = 0;
 	virtual Vec4 getButtonHoveredColorRGBA(EntityRef entity) = 0;
 	virtual void setButtonHoveredColorRGBA(EntityRef entity, const Vec4& color) = 0;
+	virtual OS::CursorType getButtonHoveredCursor(EntityRef entity) = 0;
+	virtual void setButtonHoveredCursor(EntityRef entity, OS::CursorType cursor) = 0;
 
 	virtual void enableImage(EntityRef entity, bool enable) = 0;
 	virtual bool isImageEnabled(EntityRef entity) = 0;
@@ -100,6 +103,7 @@ struct GUIScene : IScene
 	virtual DelegateList<void(EntityRef)>& buttonClicked() = 0;
 	virtual DelegateList<void(EntityRef)>& rectHovered() = 0;
 	virtual DelegateList<void(EntityRef)>& rectHoveredOut() = 0;
+	virtual DelegateList<void(EntityRef, float, float)>& rectMouseDown() = 0;
 	virtual DelegateList<void(bool, i32, i32)>& mousedButtonUnhandled() = 0;
 };
 

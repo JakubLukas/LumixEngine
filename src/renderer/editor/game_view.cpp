@@ -37,13 +37,8 @@ struct GUIInterface : GUISystem::Interface
 	Pipeline* getPipeline() override { return m_game_view.m_pipeline; }
 	Vec2 getPos() const override { return m_game_view.m_pos; }
 	Vec2 getSize() const override { return m_game_view.m_size; }
-
-	
-	void enableCursor(bool enable) override
-	{ 
-		m_game_view.enableIngameCursor(enable);
-	}
-
+	void setCursor(OS::CursorType type) { m_game_view.setCursor(type); }
+	void enableCursor(bool enable) override { m_game_view.enableIngameCursor(enable); }
 
 	GameView& m_game_view;
 };
@@ -102,6 +97,10 @@ GameView::~GameView()
 
 }
 
+void GameView::setCursor(OS::CursorType type)
+{
+	m_cursor_type = type;
+}
 
 void GameView::enableIngameCursor(bool enable)
 {
@@ -116,6 +115,7 @@ void GameView::captureMouse(bool capture)
 {
 	if (m_is_mouse_captured == capture) return;
 
+	m_app.setCursorCaptured(capture);
 	m_is_mouse_captured = capture;
 	OS::showCursor(!capture || m_is_ingame_cursor);
 	
@@ -289,8 +289,11 @@ void GameView::onWindowGUI()
 		captureMouse(false);
 	}
 
-	const char* window_name = "Game View###game_view";
-	if (m_is_mouse_captured) window_name = "Game View (mouse captured)###game_view";
+	const char* window_name = ICON_FA_CAMERA "Game View###game_view";
+	if (m_is_mouse_captured) {
+		window_name = ICON_FA_CAMERA "Game View (mouse captured)###game_view";
+		OS::setCursor(m_cursor_type);
+	}
 	
 	if (m_is_fullscreen) {
 		onFullscreenGUI();
@@ -304,6 +307,7 @@ void GameView::onWindowGUI()
 
 	ImVec2 view_pos;
 	bool is_game_view_visible = false;
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 	if (ImGui::Begin(window_name, &m_is_open, ImGuiWindowFlags_NoNavInputs)) {
 		is_game_view_visible = true;
 		view_pos = ImGui::GetCursorScreenPos();
@@ -364,6 +368,7 @@ void GameView::onWindowGUI()
 	}
 	if (m_is_mouse_captured && OS::getFocused() != ImGui::GetWindowViewport()->PlatformHandle) captureMouse(false);
 	ImGui::End();
+	ImGui::PopStyleVar();
 	if (is_game_view_visible) onStatsGUI(view_pos);
 }
 

@@ -21,6 +21,8 @@
 namespace Lumix
 {
 
+static const ComponentType GUI_RECT_TYPE = Reflection::getComponentType("gui_rect");
+
 
 PropertyGrid::PropertyGrid(StudioApp& app)
 	: m_app(app)
@@ -66,6 +68,7 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		float min = -FLT_MAX;
 		bool is_color = false;
 		bool is_radians = false;
+		bool is_multiline = false;
 		ResourceType resource_type;
 	};
 
@@ -80,6 +83,9 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 					break;
 				case Reflection::IAttribute::COLOR:
 					attrs.is_color = true;
+					break;
+				case Reflection::IAttribute::MULTILINE:
+					attrs.is_multiline = true;
 					break;
 				case Reflection::IAttribute::MIN:
 					attrs.min = ((Reflection::MinAttribute&)*attr).min;
@@ -179,12 +185,15 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		float f = prop.get(cmp, m_index);
 
 		if (attrs.is_radians) f = radiansToDegrees(f);
-		if (ImGui::DragFloat(prop.name, &f, 1, attrs.min, attrs.max))
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
+		if (ImGui::DragFloat("##v", &f, 1, attrs.min, attrs.max))
 		{
 			f = clamp(f, attrs.min, attrs.max);
 			if (attrs.is_radians) f = degreesToRadians(f);
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, f);
+			m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, f);
 		}
+		ImGui::PopID();
 	}
 
 	void visit(const Reflection::Property<int>& prop) override
@@ -196,31 +205,38 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 
 		if (enum_attr) {
 			if (m_entities.size() > 1) {
-				ImGui::LabelText(prop.name, "Multi-object editing not supported.");
+				ImGuiEx::Label(prop.name);
+				ImGui::TextUnformatted("Multi-object editing not supported.");
 				return;
 			}
 
 			const int count = enum_attr->count(cmp);
 
 			const char* preview = enum_attr->name(cmp, value);
-			if (ImGui::BeginCombo(prop.name, preview)) {
+			ImGuiEx::Label(prop.name);
+			ImGui::PushID(prop.name);
+			if (ImGui::BeginCombo("##v", preview)) {
 				for (int i = 0; i < count; ++i) {
 					const char* val_name = enum_attr->name(cmp, i);
 					if (ImGui::Selectable(val_name)) {
 						value = i;
 						const EntityRef e = (EntityRef)cmp.entity;
-						m_editor.setProperty(cmp.type, m_index, prop.name, Span(&e, 1), value);
+						m_editor.setProperty(cmp.type, m_array, m_index, prop.name, Span(&e, 1), value);
 					}
 				}
 				ImGui::EndCombo();
 			}
+			ImGui::PopID();
 			return;
 		}
 
-		if (ImGui::InputInt(prop.name, &value))
+		ImGui::PushID(prop.name);
+		ImGuiEx::Label(prop.name);
+		if (ImGui::InputInt("##v", &value))
 		{
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+			m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 		}
+		ImGui::PopID();
 	}
 
 
@@ -229,11 +245,42 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		if (skipProperty(prop)) return;
 		ComponentUID cmp = getComponent();
 		u32 value = prop.get(cmp, m_index);
+		
+		auto* enum_attr = (Reflection::EnumAttribute*)Reflection::getAttribute(prop, Reflection::IAttribute::ENUM);
+		if (enum_attr) {
+			if (m_entities.size() > 1) {
+				ImGuiEx::Label(prop.name);
+				ImGui::TextUnformatted("Multi-object editing not supported.");
+				return;
+			}
 
-		if (ImGui::InputScalar(prop.name, ImGuiDataType_U32, &value))
-		{
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+			const int count = enum_attr->count(cmp);
+
+			const char* preview = enum_attr->name(cmp, value);
+			ImGuiEx::Label(prop.name);
+			ImGui::PushID(prop.name);
+			if (ImGui::BeginCombo("##v", preview)) {
+				for (int i = 0; i < count; ++i) {
+					const char* val_name = enum_attr->name(cmp, i);
+					if (ImGui::Selectable(val_name)) {
+						value = i;
+						const EntityRef e = (EntityRef)cmp.entity;
+						m_editor.setProperty(cmp.type, m_array, m_index, prop.name, Span(&e, 1), value);
+					}
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::PopID();
+			return;
 		}
+
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
+		if (ImGui::InputScalar("##v", ImGuiDataType_U32, &value))
+		{
+			m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
+		}
+		ImGui::PopID();
 	}
 
 
@@ -246,50 +293,64 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		getEntityListDisplayName(m_app, m_editor, Span(buf), entity);
 		ImGui::PushID(prop.name);
 		
-		float item_w = ImGui::CalcItemWidth();
-		auto& style = ImGui::GetStyle();
-		float text_width = maximum(50.0f, item_w - ImGui::CalcTextSize("...").x - style.FramePadding.x * 2);
-
-		auto pos = ImGui::GetCursorPos();
-		pos.x += text_width;
-		ImGui::BeginGroup();
-		ImGui::AlignTextToFramePadding();
-		ImGui::PushTextWrapPos(pos.x);
-		ImGui::Text("%s", buf);
-		ImGui::PopTextWrapPos();
-		ImGui::SameLine();
-		ImGui::SetCursorPos(pos);
-		if (ImGui::Button("..."))
-		{
-			ImGui::OpenPopup(prop.name);
+		ImGuiEx::Label(prop.name);
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, ImGui::GetStyle().ItemSpacing.y));
+		
+		if (!entity.isValid()) {
+			copyString(buf, "No entity (click to set)");
+			ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
 		}
+		
+		if (ImGui::Button(buf, ImVec2(entity.isValid() ? -32.f : -1.f, 0))) {
+			ImGui::OpenPopup("popup");
+		}
+		if (!entity.isValid()) {
+			ImGui::PopStyleColor();
+		}
+
 		if (ImGui::BeginDragDropTarget()) {
 			if (auto* payload = ImGui::AcceptDragDropPayload("entity")) {
 				EntityRef dropped_entity = *(EntityRef*)payload->Data;
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, dropped_entity);
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, dropped_entity);
 			}
 		}
 
-		ImGui::EndGroup();
-		ImGui::SameLine();
-		ImGui::Text("%s", prop.name);
+		if (entity.isValid()) {
+			ImGui::SameLine();
+			if (ImGuiEx::IconButton(ICON_FA_BULLSEYE, "Go to")) {
+				m_grid.m_deferred_select = entity;
+			}
+			ImGui::SameLine();
+			if (ImGuiEx::IconButton(ICON_FA_TRASH, "Clear")) {
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, INVALID_ENTITY);
+			}
+		}
+		ImGui::PopStyleVar();
+
 
 		Universe& universe = *m_editor.getUniverse();
-		if (ImGui::BeginPopup(prop.name))
+		if (ImGui::BeginResizablePopup("popup", ImVec2(200, 300)))
 		{
-			if (entity.isValid() && ImGui::Button("Select")) m_grid.m_deferred_select = entity;
-
 			static char entity_filter[32] = {};
+			ImGui::SetNextItemWidth(-20);
 			ImGui::InputTextWithHint("##filter", "Filter", entity_filter, sizeof(entity_filter));
-			for (EntityPtr i = universe.getFirstEntity(); i.isValid(); i = universe.getNextEntity((EntityRef)i))
-			{
-				getEntityListDisplayName(m_app, m_editor, Span(buf), i);
-				bool show = entity_filter[0] == '\0' || stristr(buf, entity_filter) != 0;
-				if (show && ImGui::Selectable(buf))
+			ImGui::SameLine();
+			if (ImGuiEx::IconButton(ICON_FA_TIMES, "Clear filter")) {
+				entity_filter[0] = '\0';
+			}
+			
+			if (ImGui::BeginChild("list", ImVec2(0, ImGui::GetContentRegionAvail().y))) {
+				for (EntityPtr i = universe.getFirstEntity(); i.isValid(); i = universe.getNextEntity((EntityRef)i))
 				{
-					m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, i);
+					getEntityListDisplayName(m_app, m_editor, Span(buf), i);
+					bool show = entity_filter[0] == '\0' || stristr(buf, entity_filter) != 0;
+					if (show && ImGui::Selectable(buf))
+					{
+						m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, i);
+					}
 				}
 			}
+			ImGui::EndChild();
 			ImGui::EndPopup();
 		}
 		ImGui::PopID();
@@ -304,11 +365,14 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		Attributes attrs = getAttributes(prop);
 
 		if (attrs.is_radians) value = radiansToDegrees(value);
-		if (ImGui::DragFloat2(prop.name, &value.x))
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
+		if (ImGui::DragFloat2("##v", &value.x))
 		{
 			if (attrs.is_radians) value = degreesToRadians(value);
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+			m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 		}
+		ImGui::PopID();
 	}
 
 
@@ -319,22 +383,25 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		ComponentUID cmp = getComponent();
 		Vec3 value = prop.get(cmp, m_index);
 
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
 		if (attrs.is_color)
 		{
-			if (ImGui::ColorEdit3(prop.name, &value.x))
+			if (ImGui::ColorEdit3("##v", &value.x))
 			{
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 			}
 		}
 		else
 		{
 			if (attrs.is_radians) value = radiansToDegrees(value);
-			if (ImGui::DragFloat3(prop.name, &value.x, 1, attrs.min, attrs.max))
+			if (ImGui::DragFloat3("##v", &value.x, 1, attrs.min, attrs.max))
 			{
 				if (attrs.is_radians) value = degreesToRadians(value);
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 			}
 		}
+		ImGui::PopID();
 	}
 
 
@@ -344,9 +411,12 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		ComponentUID cmp = getComponent();
 		IVec3 value = prop.get(cmp, m_index);
 		
-		if (ImGui::DragInt3(prop.name, &value.x)) {
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
+		if (ImGui::DragInt3("##v", &value.x)) {
+			m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 		}
+		ImGui::PopID();
 	}
 
 
@@ -357,20 +427,23 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		ComponentUID cmp = getComponent();
 		Vec4 value = prop.get(cmp, m_index);
 
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
 		if (attrs.is_color)
 		{
-			if (ImGui::ColorEdit4(prop.name, &value.x))
+			if (ImGui::ColorEdit4("##v", &value.x))
 			{
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 			}
 		}
 		else
 		{
-			if (ImGui::DragFloat4(prop.name, &value.x))
+			if (ImGui::DragFloat4("##v", &value.x))
 			{
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 			}
 		}
+		ImGui::PopID();
 	}
 
 
@@ -380,10 +453,13 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 		ComponentUID cmp = getComponent();
 		bool value = prop.get(cmp, m_index);
 
-		if (ImGui::CheckboxEx(prop.name, &value))
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
+		if (ImGui::Checkbox("##v", &value))
 		{
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, value);
+			m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, value);
 		}
+		ImGui::PopID();
 	}
 
 
@@ -397,20 +473,23 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 
 		Attributes attrs = getAttributes(prop);
 
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
 		if (attrs.resource_type != INVALID_RESOURCE_TYPE)
 		{
-			if (m_app.getAssetBrowser().resourceInput(prop.name, prop.name, Span(tmp), attrs.resource_type))
+			if (m_app.getAssetBrowser().resourceInput(prop.name, Span(tmp), attrs.resource_type))
 			{
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, Path(tmp));
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, Path(tmp));
 			}
 		}
 		else
 		{
-			if (ImGui::InputText(prop.name, tmp, sizeof(tmp)))
+			if (ImGui::InputText("##v", tmp, sizeof(tmp)))
 			{
-				m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, Path(tmp));
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, Path(tmp));
 			}
 		}
+		ImGui::PopID();
 	}
 
 
@@ -418,14 +497,24 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 	{
 		if (skipProperty(prop)) return;
 		ComponentUID cmp = getComponent();
+		const Attributes attrs = getAttributes(prop);
 		
 		char tmp[1024];
 		copyString(tmp, prop.get(cmp, m_index));
 
-		if (ImGui::InputText(prop.name, tmp, sizeof(tmp)))
-		{
-			m_editor.setProperty(m_cmp_type, m_index, prop.name, m_entities, tmp);
+		ImGuiEx::Label(prop.name);
+		ImGui::PushID(prop.name);
+		if(attrs.is_multiline) {
+			if (ImGui::InputTextMultiline("##v", tmp, sizeof(tmp))) {
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, tmp);
+			}
 		}
+		else {
+			if (ImGui::InputText("##v", tmp, sizeof(tmp))) {
+				m_editor.setProperty(m_cmp_type, m_array, m_index, prop.name, m_entities, tmp);
+			}
+		}
+		ImGui::PopID();
 	}
 
 
@@ -444,17 +533,19 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 			return;
 		}
 
+		ImGui::PushID(prop.name);
 		ComponentUID cmp = getComponent();
 		int count = prop.getCount(cmp);
 		const ImGuiStyle& style = ImGui::GetStyle();
-		ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize("Add").x - style.FramePadding.x * 2 - style.WindowPadding.x - 15);
-		if (ImGui::SmallButton("Add"))
+		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(ICON_FA_PLUS).x);
+		if (ImGuiEx::IconButton(ICON_FA_PLUS, "Add item"))
 		{
 			m_editor.addArrayPropertyItem(cmp, prop.name);
 			count = prop.getCount(cmp);
 		}
 		if (!is_open)
 		{
+			ImGui::PopID();
 			ImGui::Indent();
 			return;
 		}
@@ -466,8 +557,8 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 			ImGui::PushID(i);
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap;
 			bool is_open = ImGui::TreeNodeEx(tmp, flags);
-			ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize("Remove").x - style.FramePadding.x * 2 - style.WindowPadding.x - 15);
-			if (ImGui::SmallButton("Remove"))
+			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(ICON_FA_TRASH).x);
+			if (ImGuiEx::IconButton(ICON_FA_TRASH, "Remove"))
 			{
 				m_editor.removeArrayPropertyItem(cmp, i, prop.name);
 				--i;
@@ -480,17 +571,20 @@ struct GridUIVisitor final : Reflection::IPropertyVisitor
 			if (is_open)
 			{
 				GridUIVisitor v(m_app, i, m_entities, m_cmp_type, m_editor);
+				v.m_array = prop.name;
 				prop.visit(v);
 				ImGui::TreePop();
 			}
 
 			ImGui::PopID();
 		}
+		ImGui::PopID();
 		ImGui::TreePop();
 		ImGui::Indent();
 	}
 
 
+	const char* m_array = "";
 	StudioApp& m_app;
 	WorldEditor& m_editor;
 	ComponentType m_cmp_type;
@@ -505,6 +599,7 @@ static bool componentTreeNode(StudioApp& app, WorldEditor& editor, ComponentType
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap;
 	ImGui::Separator();
 	const char* cmp_type_name = app.getComponentTypeName(cmp_type);
+	const char* icon = app.getComponentIcon(cmp_type);
 	ImGui::PushFont(app.getBoldFont());
 	bool is_open;
 	bool enabled = true;
@@ -516,14 +611,14 @@ static bool componentTreeNode(StudioApp& app, WorldEditor& editor, ComponentType
 		cmp.type = cmp_type;
 		cmp.entity = entities[0];
 		cmp.scene = editor.getUniverse()->getScene(cmp_type);
-		if(ImGui::Checkbox(cmp_type_name, &enabled))
+		if(ImGui::Checkbox(StaticString<256>(icon, cmp_type_name), &enabled))
 		{
-			editor.setProperty(cmp_type, -1, "Enabled", Span(entities, entities_count), enabled);
+			editor.setProperty(cmp_type, "", -1, "Enabled", Span(entities, entities_count), enabled);
 		}
 	}
 	else
 	{ 
-		is_open = ImGui::TreeNodeEx((void*)(uintptr)cmp_type.index, flags, "%s", cmp_type_name);
+		is_open = ImGui::TreeNodeEx((void*)(uintptr)cmp_type.index, flags, "%s%s", icon, cmp_type_name);
 	}
 	ImGui::PopFont();
 	return is_open;
@@ -534,12 +629,19 @@ void PropertyGrid::showComponentProperties(const Array<EntityRef>& entities, Com
 {
 	bool is_open = componentTreeNode(m_app, m_editor, cmp_type, &entities[0], entities.size());
 	ImGuiStyle& style = ImGui::GetStyle();
-	ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize("Remove").x - style.FramePadding.x * 2 - style.WindowPadding.x - 15);
-	if (ImGui::SmallButton("Remove"))
+	ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(ICON_FA_ELLIPSIS_V).x);
+	if (ImGuiEx::IconButton(ICON_FA_ELLIPSIS_V, "Context menu"))
 	{
-		m_editor.destroyComponent(entities, cmp_type);
-		if (is_open) ImGui::TreePop();
-		return;
+		ImGui::OpenPopup("ctx");
+	}
+	if (ImGui::BeginPopup("ctx")) {
+		if (ImGui::Selectable("Remove component")) {
+			m_editor.destroyComponent(entities, cmp_type);
+			ImGui::EndPopup();
+			if (is_open) ImGui::TreePop();
+			return;
+		}
+		ImGui::EndPopup();
 	}
 
 	if (!is_open) return;
@@ -547,13 +649,6 @@ void PropertyGrid::showComponentProperties(const Array<EntityRef>& entities, Com
 	const Reflection::ComponentBase* component = Reflection::getComponent(cmp_type);
 	GridUIVisitor visitor(m_app, -1, entities, cmp_type, m_editor);
 	if (component) component->visit(visitor);
-
-	if (m_deferred_select.isValid())
-	{
-		const EntityRef e = (EntityRef)m_deferred_select;
-		m_editor.selectEntities(&e, 1, false);
-		m_deferred_select = INVALID_ENTITY;
-	}
 
 	if (entities.size() == 1)
 	{
@@ -573,8 +668,10 @@ void PropertyGrid::showComponentProperties(const Array<EntityRef>& entities, Com
 void PropertyGrid::showCoreProperties(const Array<EntityRef>& entities) const
 {
 	char name[256];
-	const char* tmp = m_editor.getUniverse()->getEntityName(entities[0]);
+	Universe& universe = *m_editor.getUniverse();
+	const char* tmp = universe.getEntityName(entities[0]);
 	copyString(name, tmp);
+	ImGui::SetNextItemWidth(-1);
 	if (ImGui::InputTextWithHint("##name", "Name", name, sizeof(name))) m_editor.setEntityName(entities[0], name);
 	ImGui::PushFont(m_app.getBoldFont());
 	if (!ImGui::TreeNodeEx("General", ImGuiTreeNodeFlags_DefaultOpen))
@@ -589,84 +686,102 @@ void PropertyGrid::showCoreProperties(const Array<EntityRef>& entities) const
 		PrefabResource* prefab = prefab_system.getPrefabResource(entities[0]);
 		if (prefab)
 		{
-			ImGui::SameLine();
-			if (ImGui::Button("Save prefab"))
+			ImGuiEx::Label("Prefab");
+			ImGui::TextUnformatted(prefab->getPath().c_str());
+			if (ImGui::Button(ICON_FA_SAVE "Save prefab"))
 			{
-				prefab_system.savePrefab(prefab->getPath());
+				prefab_system.savePrefab(entities[0], prefab->getPath());
+			}
+			ImGui::SameLine();
+			if (ImGui::Button(ICON_FA_UNLINK "Break prefab"))
+			{
+				prefab_system.breakPrefab(entities[0]);
 			}
 		}
 
-		EntityPtr parent = m_editor.getUniverse()->getParent(entities[0]);
+		ImGuiEx::Label("ID");
+		ImGui::Text("%d", entities[0].index);
+		EntityPtr parent = universe.getParent(entities[0]);
 		if (parent.isValid())
 		{
 			getEntityListDisplayName(m_app, m_editor, Span(name), parent);
-			ImGui::LabelText("Parent", "%s", name);
+			ImGuiEx::Label("Parent");
+			ImGui::Text("%s", name);
 
-			Transform tr = m_editor.getUniverse()->getLocalTransform(entities[0]);
-			DVec3 old_pos = tr.pos;
-			if (ImGui::DragScalarN("Local position", ImGuiDataType_Double, &tr.pos.x, 3, 1.f))
-			{
-				WorldEditor::Coordinate coord = WorldEditor::Coordinate::NONE;
-				if (tr.pos.x != old_pos.x) coord = WorldEditor::Coordinate::X;
-				if (tr.pos.y != old_pos.y) coord = WorldEditor::Coordinate::Y;
-				if (tr.pos.z != old_pos.z) coord = WorldEditor::Coordinate::Z;
-				if (coord != WorldEditor::Coordinate::NONE)
+			if (!universe.hasComponent(entities[0], GUI_RECT_TYPE)) {
+				Transform tr = universe.getLocalTransform(entities[0]);
+				DVec3 old_pos = tr.pos;
+				ImGuiEx::Label("Local position");
+				if (ImGui::DragScalarN("##lcl_pos", ImGuiDataType_Double, &tr.pos.x, 3, 1.f))
 				{
-					m_editor.setEntitiesLocalCoordinate(&entities[0], entities.size(), (&tr.pos.x)[(int)coord], coord);
+					WorldEditor::Coordinate coord = WorldEditor::Coordinate::NONE;
+					if (tr.pos.x != old_pos.x) coord = WorldEditor::Coordinate::X;
+					if (tr.pos.y != old_pos.y) coord = WorldEditor::Coordinate::Y;
+					if (tr.pos.z != old_pos.z) coord = WorldEditor::Coordinate::Z;
+					if (coord != WorldEditor::Coordinate::NONE)
+					{
+						m_editor.setEntitiesLocalCoordinate(&entities[0], entities.size(), (&tr.pos.x)[(int)coord], coord);
+					}
 				}
 			}
 		}
 	}
 	else
 	{
-		ImGui::LabelText("ID", "%s", "Multiple objects");
-		ImGui::LabelText("Name", "%s", "Multi-object editing not supported.");
+		ImGuiEx::Label("ID");
+		ImGui::Text("%s", "Multiple objects");
+		ImGuiEx::Label("Name");
+		ImGui::Text("%s", "Multi-object editing not supported.");
 	}
 
 
-	DVec3 pos = m_editor.getUniverse()->getPosition(entities[0]);
-	DVec3 old_pos = pos;
-	if (ImGui::DragScalarN("Position", ImGuiDataType_Double, &pos.x, 3, 1.f))
-	{
-		WorldEditor::Coordinate coord = WorldEditor::Coordinate::NONE;
-		if (pos.x != old_pos.x) coord = WorldEditor::Coordinate::X;
-		if (pos.y != old_pos.y) coord = WorldEditor::Coordinate::Y;
-		if (pos.z != old_pos.z) coord = WorldEditor::Coordinate::Z;
-		if (coord != WorldEditor::Coordinate::NONE)
+	if (!universe.hasComponent(entities[0], GUI_RECT_TYPE)) {
+		DVec3 pos = universe.getPosition(entities[0]);
+		DVec3 old_pos = pos;
+		ImGuiEx::Label("Position");
+		if (ImGui::DragScalarN("##pos", ImGuiDataType_Double, &pos.x, 3, 1.f, 0, 0, "%.3f"))
 		{
-			m_editor.setEntitiesCoordinate(&entities[0], entities.size(), (&pos.x)[(int)coord], coord);
+			WorldEditor::Coordinate coord = WorldEditor::Coordinate::NONE;
+			if (pos.x != old_pos.x) coord = WorldEditor::Coordinate::X;
+			if (pos.y != old_pos.y) coord = WorldEditor::Coordinate::Y;
+			if (pos.z != old_pos.z) coord = WorldEditor::Coordinate::Z;
+			if (coord != WorldEditor::Coordinate::NONE)
+			{
+				m_editor.setEntitiesCoordinate(&entities[0], entities.size(), (&pos.x)[(int)coord], coord);
+			}
 		}
-	}
 
-	Universe* universe = m_editor.getUniverse();
-	Quat rot = universe->getRotation(entities[0]);
-	Vec3 old_euler = rot.toEuler();
-	Vec3 euler = radiansToDegrees(old_euler);
-	if (ImGui::DragFloat3("Rotation", &euler.x))
-	{
-		if (euler.x <= -90.0f || euler.x >= 90.0f) euler.y = 0;
-		euler.x = degreesToRadians(clamp(euler.x, -90.0f, 90.0f));
-		euler.y = degreesToRadians(fmodf(euler.y + 180, 360.0f) - 180);
-		euler.z = degreesToRadians(fmodf(euler.z + 180, 360.0f) - 180);
-		rot.fromEuler(euler);
+		Quat rot = universe.getRotation(entities[0]);
+		Vec3 old_euler = rot.toEuler();
+		Vec3 euler = radiansToDegrees(old_euler);
+		ImGuiEx::Label("Rotation");
+		if (ImGui::DragFloat3("##rot", &euler.x))
+		{
+			if (euler.x <= -90.0f || euler.x >= 90.0f) euler.y = 0;
+			euler.x = degreesToRadians(clamp(euler.x, -90.0f, 90.0f));
+			euler.y = degreesToRadians(fmodf(euler.y + 180, 360.0f) - 180);
+			euler.z = degreesToRadians(fmodf(euler.z + 180, 360.0f) - 180);
+			rot.fromEuler(euler);
 		
-		Array<Quat> rots(m_editor.getAllocator());
-		for (EntityRef entity : entities)
-		{
-			Vec3 tmp = universe->getRotation(entity).toEuler();
+			Array<Quat> rots(m_editor.getAllocator());
+			for (EntityRef entity : entities)
+			{
+				Vec3 tmp = universe.getRotation(entity).toEuler();
 			
-			if (fabs(euler.x - old_euler.x) > 0.01f) tmp.x = euler.x;
-			if (fabs(euler.y - old_euler.y) > 0.01f) tmp.y = euler.y;
-			if (fabs(euler.z - old_euler.z) > 0.01f) tmp.z = euler.z;
-			rots.emplace().fromEuler(tmp);
+				if (fabs(euler.x - old_euler.x) > 0.01f) tmp.x = euler.x;
+				if (fabs(euler.y - old_euler.y) > 0.01f) tmp.y = euler.y;
+				if (fabs(euler.z - old_euler.z) > 0.01f) tmp.z = euler.z;
+				rots.emplace().fromEuler(tmp);
+			}
+			m_editor.setEntitiesRotations(&entities[0], &rots[0], entities.size());
 		}
-		m_editor.setEntitiesRotations(&entities[0], &rots[0], entities.size());
-	}
 
-	float scale = m_editor.getUniverse()->getScale(entities[0]);
-	if (ImGui::DragFloat("Scale", &scale, 0.1f))
-	{
-		m_editor.setEntitiesScale(&entities[0], entities.size(), scale);
+		float scale = universe.getScale(entities[0]);
+		ImGuiEx::Label("Scale");
+		if (ImGui::DragFloat("##scale", &scale, 0.1f, 0, FLT_MAX))
+		{
+			m_editor.setEntitiesScale(&entities[0], entities.size(), scale);
+		}
 	}
 	ImGui::TreePop();
 }
@@ -710,19 +825,8 @@ void PropertyGrid::onGUI()
 	if (!m_is_open) return;
 
 	const Array<EntityRef>& ents = m_editor.getSelectedEntities();
-	if (ImGui::Begin("Properties", &m_is_open) && !ents.empty())
+	if (ImGui::Begin(ICON_FA_INFO_CIRCLE "Inspector##inspector", &m_is_open) && !ents.empty())
 	{
-		if (ImGui::Button("Add component"))
-		{
-			ImGui::OpenPopup("AddComponentPopup");
-		}
-		if (ImGui::BeginPopup("AddComponentPopup"))
-		{
-			ImGui::InputTextWithHint("##filter", "Filter", m_component_filter, sizeof(m_component_filter));
-			showAddComponentNode(m_app.getAddComponentTreeRoot().child, m_component_filter);
-			ImGui::EndPopup();
-		}
-
 		showCoreProperties(ents);
 
 		Universe& universe = *m_editor.getUniverse();
@@ -731,8 +835,34 @@ void PropertyGrid::onGUI()
 		{
 			showComponentProperties(ents, cmp.type);
 		}
+
+		ImGui::Separator();
+		const float x = (ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(ICON_FA_PLUS "Add component").x - ImGui::GetStyle().FramePadding.x * 2) * 0.5f;
+		ImGui::SetCursorPosX(x);
+		if (ImGui::Button(ICON_FA_PLUS "Add component")) {
+			ImGui::OpenPopup("AddComponentPopup");
+		}
+		
+		if (ImGui::BeginResizablePopup("AddComponentPopup", ImVec2(300, 300))) {
+			ImGui::SetNextItemWidth(-20);
+			ImGui::InputTextWithHint("##filter", "Filter", m_component_filter, sizeof(m_component_filter));
+			ImGui::SameLine();
+			if (ImGuiEx::IconButton(ICON_FA_TIMES, "Clear filter")) {
+				m_component_filter[0] = '\0';
+			}
+
+			showAddComponentNode(m_app.getAddComponentTreeRoot().child, m_component_filter);
+			ImGui::EndPopup();
+		}
 	}
 	ImGui::End();
+
+	if (m_deferred_select.isValid())
+	{
+		const EntityRef e = (EntityRef)m_deferred_select;
+		m_editor.selectEntities(Span(&e, 1u), false);
+		m_deferred_select = INVALID_ENTITY;
+	}
 }
 
 

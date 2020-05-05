@@ -992,13 +992,16 @@ public:
 	{
 		struct : Reflection::IEmptyPropertyVisitor {
 			void visit(const Reflection::IArrayProperty& prop) override {
+				if (!equalStrings(prop.name, prop_name)) return;
 				index = prop.getCount(cmp);
 				prop.addItem(cmp, index);
 			}
 			ComponentUID cmp;
 			int index;
+			const char* prop_name;
 		} v;
 		v.cmp = m_component;
+		v.prop_name = m_property;
 		Reflection::getComponent(m_component.type)->visit(v);
 		m_index = v.index;
 		return true;
@@ -1065,6 +1068,7 @@ public:
 	SetPropertyCommand(WorldEditor& editor,
 		Span<const EntityRef> entities,
 		ComponentType component_type,
+		const char* array,
 		int index,
 		const char* property_name,
 		T value)
@@ -1073,6 +1077,7 @@ public:
 		, m_property_name(property_name, editor.getAllocator())
 		, m_editor(editor)
 		, m_index(index)
+		, m_array(array, editor.getAllocator())
 		, m_old_values(editor.getAllocator())
 		, m_new_value(StoredType<T>::construct(value, editor.getAllocator()))
 	{
@@ -1107,21 +1112,31 @@ public:
 	{
 		struct : Reflection::IEmptyPropertyVisitor {
 			void visit(const Reflection::Property<T>& prop) override { 
-				if (cmd->m_property_name != prop.name) return;
+				if (array[0] != '\0') return;
+				if (!equalIStrings(prop_name, prop.name)) return;
 				found = true;
 				for (EntityPtr entity : cmd->m_entities) {
 					const ComponentUID cmp = cmd->m_editor.getUniverse()->getComponent((EntityRef)entity, cmd->m_component_type);
 					prop.set(cmp, cmd->m_index, StoredType<T>::get(cmd->m_new_value));
 				}
 			}
-			void visit(const Reflection::IArrayProperty& prop) override { prop.visit(*this); }
+
+			void visit(const Reflection::IArrayProperty& prop) override { 
+				if (!equalStrings(array, prop.name)) return;
+
+				const char* tmp = array;
+				array = "";
+				prop.visit(*this);
+				array = tmp;
+			}
+
 			void visit(const Reflection::IDynamicProperties& prop) override { 
 				for (EntityPtr entity : cmd->m_entities) {
 					const ComponentUID cmp = cmd->m_editor.getUniverse()->getComponent((EntityRef)entity, cmd->m_component_type);
 					const u32 c = prop.getCount(cmp, cmd->m_index);
 					for (u32 i = 0; i < c; ++i) {
 						const char* name = prop.getName(cmp, cmd->m_index, i);
-						if (cmd->m_property_name != name) continue;
+						if (!equalStrings(prop_name, name)) continue;
 						found = true;
 						Reflection::IDynamicProperties::Value v;
 						set(Ref(v), cmd->m_new_value);
@@ -1130,9 +1145,13 @@ public:
 				}
 			}
 			SetPropertyCommand<T>* cmd;
+			const char* prop_name;
+			const char* array;
 			bool found = false;
 		} v;
 		v.cmd = this;
+		v.prop_name = m_property_name.c_str();
+		v.array = m_array.c_str();
 		Reflection::getComponent(m_component_type)->visit(v);
 		return v.found;
 	}
@@ -1161,6 +1180,7 @@ public:
 		SetPropertyCommand& src = static_cast<SetPropertyCommand&>(command);
 		if (m_component_type == src.m_component_type &&
 			m_entities.size() == src.m_entities.size() &&
+			src.m_array == m_array &&
 			src.m_property_name == m_property_name &&
 			m_index == src.m_index)
 		{
@@ -1181,6 +1201,7 @@ private:
 	Array<EntityRef> m_entities;
 	typename StoredType<T>::Type m_new_value;
 	OutputMemoryStream m_old_values;
+	String m_array;
 	int m_index;
 	String m_property_name;
 };
@@ -1363,7 +1384,6 @@ private:
 
 		bool execute() override
 		{
-			m_editor.selectEntities(nullptr, 0, false);
 			Universe* universe = m_editor.getUniverse();
 			m_transformations.clear();
 			m_old_values.clear();
@@ -1608,7 +1628,7 @@ private:
 				m_entity = m_editor.getUniverse()->createEntity(m_position, Quat(0, 0, 0, 1));
 			}
 			const EntityRef e = (EntityRef)m_entity;
-			m_editor.selectEntities(&e, 1, false);
+			m_editor.selectEntities(Span(&e, 1), false);
 			return true;
 		}
 
@@ -1652,6 +1672,7 @@ public:
 	{
 		PROFILE_FUNCTION();
 
+		Gizmo::frame();
 		// TODO do not allow user interaction (e.g. saving universe) while queue is not empty
 		while (!m_command_queue.empty()) {
 			if (!m_command_queue[0]->isReady()) break;
@@ -1721,14 +1742,17 @@ public:
 
 	bool isUniverseChanged() const override { return m_is_universe_changed; }
 
-
 	void saveUniverse(const char* basename, bool save_path) override
 	{
+		saveProject();
+
 		logInfo("Editor") << "Saving universe " << basename << "...";
 		
 		StaticString<MAX_PATH_LENGTH> dir(m_engine.getFileSystem().getBasePath(), "universes/", basename);
 		OS::makePath(dir);
 		StaticString<MAX_PATH_LENGTH> path(dir, "/entities.unv");
+		StaticString<MAX_PATH_LENGTH> bkp_path(dir, "/entities.unv.bak");
+		if (OS::fileExists(path)) OS::copyFile(path, bkp_path);
 		OS::OutputFile file;
 		if (file.open(path)) {
 			save(file);
@@ -1762,9 +1786,9 @@ public:
 		const Viewport& vp = getView().getViewport();
 		blob.write(vp.pos);
 		blob.write(vp.rot);
-		header.hash = crc32((const u8*)blob.getData() + hashed_offset, (int)blob.getPos() - hashed_offset);
-		*(Header*)blob.getData() = header;
-		file.write(blob.getData(), blob.getPos());
+		header.hash = crc32((const u8*)blob.data() + hashed_offset, (int)blob.size() - hashed_offset);
+		memcpy(blob.getMutableData(), &header, sizeof(header));
+		file.write(blob.data(), blob.size());
 
 		logInfo("editor") << "Universe saved";
 	}
@@ -2097,7 +2121,7 @@ public:
 		ASSERT(m_universe);
 		m_engine.getResourceManager().enableUnload(false);
 		m_engine.stopGame(*m_universe);
-		selectEntities(nullptr, 0, false);
+		selectEntities({}, false);
 		m_is_game_mode = false;
 		if (reload)
 		{
@@ -2118,7 +2142,7 @@ public:
 		m_game_mode_file.clear();
 		if(m_selected_entity_on_game_mode.isValid()) {
 			EntityRef e = (EntityRef)m_selected_entity_on_game_mode;
-			selectEntities(&e, 1, false);
+			selectEntities(Span(&e, 1), false);
 		}
 		m_engine.getResourceManager().enableUnload(true);
 	}
@@ -2129,8 +2153,9 @@ public:
 		return *m_prefab_system;
 	}
 
-	void copyEntities(const EntityRef* entities, int count, OutputMemoryStream& serializer)
+	void copyEntities(Span<const EntityRef> entities, OutputMemoryStream& serializer)
 	{
+		i32 count = entities.length();
 		serializer.write(count);
 		for (int i = 0; i < count; ++i) {
 			m_copy_buffer.write(entities[i]);
@@ -2171,6 +2196,7 @@ public:
 		}
 	}
 
+
 	void copyEntities() override {
 		if (m_selected_entities.empty()) return;
 
@@ -2181,13 +2207,13 @@ public:
 		for (EntityRef e : m_selected_entities) {
 			gatherHierarchy(e, Ref(entities));
 		}
-		copyEntities(&entities[0], entities.size(), m_copy_buffer);
+		copyEntities(entities, m_copy_buffer);
 	}
 
 
 	bool canPasteEntities() const override
 	{
-		return m_copy_buffer.getPos() > 0;
+		return m_copy_buffer.size() > 0;
 	}
 
 
@@ -2208,6 +2234,52 @@ public:
 		ASSERT(entities.length() > 0);
 		IEditorCommand* command = LUMIX_NEW(m_allocator, AddComponentCommand)(*this, entities, cmp_type);
 		executeCommand(command);
+	}
+
+	void saveProject() {
+		const char* base_path = m_engine.getFileSystem().getBasePath();
+		const StaticString<MAX_PATH_LENGTH> path(base_path, "lumix.prj");
+		OS::OutputFile file;
+		if (file.open(path)) {
+			OutputMemoryStream stream(m_allocator);
+			m_engine.serializeProject(stream);
+			bool saved = true;
+			if (!file.write(stream.data(), stream.size())) {
+				logError("Editor") << "Failed to save project " << path;
+				saved = false;
+			}
+			file.close();
+			if (!saved) OS::deleteFile(path);
+			return;
+		}
+		logError("Editor") << "Failed to save project " << path;
+	}
+
+	bool loadProject() override {
+		const char* base_path = m_engine.getFileSystem().getBasePath();
+		const StaticString<MAX_PATH_LENGTH> path(base_path, "lumix.prj");
+		OS::InputFile file;
+		if (file.open(path)) {
+			const u64 size = file.size();
+			if (size < 8) {
+				logError("Editor") << "Invalid file " << path;
+				file.close();
+				return false;
+			}
+			OutputMemoryStream data(m_allocator);
+			data.resize((u32)size);
+			if (!file.read(data.getMutableData(), data.size())) {
+				logError("Editor") << "Failed to read " << path;
+				file.close();
+				return false;
+			}
+			InputMemoryStream stream(data);
+			bool res = m_engine.deserializeProject(stream);
+			file.close();
+			return res;
+		}
+		logError("Editor") << "Failed to open " << path;
+		return false;
 	}
 
 	void loadUniverse(const char* basename) override
@@ -2277,16 +2349,16 @@ public:
 
 		OS::Timer timer;
 		logInfo("Editor") << "Parsing universe...";
-		Array<u8> data(m_allocator);
+		OutputMemoryStream data(m_allocator);
 		if (!file.getBuffer()) {
 			data.resize((u32)file_size);
-			if (!file.read(data.begin(), data.byte_size())) {
+			if (!file.read(data.getMutableData(), data.size())) {
 				logError("Editor") << "Failed to load file.";
 				m_is_loading = false;
 				return false;
 			}
 		}
-		InputMemoryStream blob(file.getBuffer() ? file.getBuffer() : data.begin(), (int)file_size);
+		InputMemoryStream blob(file.getBuffer() ? file.getBuffer() : data.data(), (int)file_size);
 		u32 hash = 0;
 		blob.read(hash);
 		header.version = -1;
@@ -2347,7 +2419,6 @@ public:
 		, m_copy_buffer(m_allocator)
 		, m_is_loading(false)
 		, m_universe(nullptr)
-		, m_is_toggle_selection(false)
 		, m_selected_entity_on_game_mode(INVALID_ENTITY)
 		, m_is_game_mode(false)
 		, m_undo_index(-1)
@@ -2355,6 +2426,7 @@ public:
         , m_game_mode_file(m_allocator)
 		, m_command_queue(m_allocator)
 	{
+		loadProject();
 		logInfo("Editor") << "Initializing editor...";
 
 		m_prefab_system = PrefabSystem::create(*this);
@@ -2372,9 +2444,6 @@ public:
 	{
 		return m_selected_entities;
 	}
-
-
-	void setToggleSelection(bool is_toggle) override { m_is_toggle_selection = is_toggle; }
 
 
 	void addArrayPropertyItem(const ComponentUID& cmp, const char* property) override
@@ -2397,46 +2466,39 @@ public:
 	}
 
 	template <typename T>
-	void set(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, T val) {
+	void set(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, T val) {
 		IEditorCommand* command = LUMIX_NEW(m_allocator, SetPropertyCommand<T>)(
-			*this, entities, cmp, idx, prop, val);
+			*this, entities, cmp, array, idx, prop, val);
 		executeCommand(command);
 		
 	}
 
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, float val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, i32 val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, u32 val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, EntityPtr val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, const char* val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, const Path& val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, bool val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, const Vec2& val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, const Vec3& val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, const Vec4& val) override { set(cmp, idx, prop, entities, val); }
-	void setProperty(ComponentType cmp, int idx, const char* prop, Span<const EntityRef> entities, const IVec3& val) override { set(cmp, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, float val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, i32 val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, u32 val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, EntityPtr val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, const char* val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, const Path& val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, bool val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, const Vec2& val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, const Vec3& val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, const Vec4& val) override { set(cmp, array, idx, prop, entities, val); }
+	void setProperty(ComponentType cmp, const char* array, int idx, const char* prop, Span<const EntityRef> entities, const IVec3& val) override { set(cmp, array, idx, prop, entities, val); }
 
-	void selectEntities(const EntityRef* entities, int count, bool toggle) override
-	{
-		if (!toggle || !m_is_toggle_selection)
-		{
+	void selectEntities(Span<const EntityRef> entities, bool toggle) override {
+		if (!toggle) {
 			m_selected_entities.clear();
-			for (int i = 0; i < count; ++i)
-			{
-				m_selected_entities.push(entities[i]);
+			for (EntityRef e : entities) {
+				m_selected_entities.push(e);
 			}
 		}
-		else
-		{
-			for (int i = 0; i < count; ++i)
-			{
-				int idx = m_selected_entities.indexOf(entities[i]);
-				if (idx < 0)
-				{
-					m_selected_entities.push(entities[i]);
+		else {
+			for (EntityRef e : entities) { 
+				const i32 idx = m_selected_entities.indexOf(e);
+				if (idx < 0) {
+					m_selected_entities.push(e);
 				}
-				else
-				{
+				else {
 					m_selected_entities.swapAndPop(idx);
 				}
 			}
@@ -2460,7 +2522,7 @@ public:
 		destroyUndoStack();
 		m_universe_destroyed.invoke();
 		m_prefab_system->setUniverse(nullptr);
-		selectEntities(nullptr, 0, false);
+		selectEntities({}, false);
 		m_engine.destroyUniverse(*m_universe);
 		m_universe = nullptr;
 	}
@@ -2500,7 +2562,6 @@ public:
 
 		universe->entityDestroyed().bind<&WorldEditorImpl::onEntityDestroyed>(this);
 
-		if (m_view) m_view->setOrbitCamera(false);
 		m_selected_entities.clear();
 		m_universe_created.invoke();
 		m_prefab_system->setUniverse(universe);
@@ -2596,8 +2657,6 @@ private:
 	Array<EntityRef> m_selected_entities;
 	EntityPtr m_selected_entity_on_game_mode;
 
-	bool m_is_toggle_selection;
-
 	bool m_is_game_mode;
 	int m_game_mode_commands;
 	OutputMemoryStream m_game_mode_file;
@@ -2623,18 +2682,6 @@ public:
 		m_position = hit.pos;
 	}
 
-
-	PasteEntityCommand(WorldEditor& editor, const DVec3& pos, const OutputMemoryStream& copy_buffer, bool identity = false)
-		: m_copy_buffer(copy_buffer)
-		, m_editor(editor)
-		, m_position(pos)
-		, m_entities(editor.getAllocator())
-		, m_map(editor.getAllocator())
-		, m_identity(identity)
-	{
-	}
-
-
 	bool execute() override
 	{
 		InputMemoryStream blob(m_copy_buffer);
@@ -2655,6 +2702,7 @@ public:
 				m_entities[i] = universe.createEntity(DVec3(0), Quat(0, 0, 0, 1));
 			}
 		}
+		m_editor.selectEntities(m_entities, false);
 
 		Transform base_tr;
 		base_tr.pos = m_position;

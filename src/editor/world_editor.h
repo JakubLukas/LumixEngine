@@ -47,8 +47,6 @@ struct UniverseView {
 	virtual void setTopView() = 0;
 	virtual void setFrontView() = 0;
 	virtual void setSideView() = 0;
-	virtual bool isOrbitCamera() const = 0;
-	virtual void setOrbitCamera(bool enable) = 0;
 	virtual void moveCamera(float forward, float right, float up, float speed) = 0;
 	virtual void copyTransform() = 0;
 
@@ -87,6 +85,7 @@ struct LUMIX_EDITOR_API WorldEditor
 	static WorldEditor* create(struct Engine& engine, struct IAllocator& allocator);
 	static void destroy(WorldEditor* editor, IAllocator& allocator);
 
+	virtual bool loadProject() = 0;
 	virtual void update() = 0;
 	virtual Engine& getEngine() = 0;
 	virtual struct Universe* getUniverse() = 0;
@@ -108,7 +107,7 @@ struct LUMIX_EDITOR_API WorldEditor
 	virtual void destroyComponent(Span<const EntityRef> entities, ComponentType cmp_type) = 0;
 	virtual EntityRef addEntity() = 0;
 	virtual void destroyEntities(const EntityRef* entities, int count) = 0;
-	virtual void selectEntities(const EntityRef* entities, int count, bool toggle) = 0;
+	virtual void selectEntities(Span<const EntityRef> entities, bool toggle) = 0;
 	virtual EntityRef addEntityAt(int camera_x, int camera_y) = 0;
 	virtual EntityRef addEntityAt(const DVec3& pos) = 0;
 	virtual void setEntitiesPositions(const EntityRef* entities, const DVec3* positions, int count) = 0;
@@ -123,17 +122,17 @@ struct LUMIX_EDITOR_API WorldEditor
 		int count) = 0;
 	virtual void setEntityName(EntityRef entity, const char* name) = 0;
 	
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, float value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, i32 value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, u32 value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, EntityPtr value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, const char* value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, const struct Path& value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, bool value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, const Vec2& value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, const Vec3& value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, const Vec4& value) = 0;
-	virtual void setProperty(ComponentType component, int index, const char* property, Span<const EntityRef> entities, const IVec3& value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, float value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, i32 value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, u32 value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, EntityPtr value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, const char* value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, const struct Path& value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, bool value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, const Vec2& value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, const Vec3& value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, const Vec4& value) = 0;
+	virtual void setProperty(ComponentType component, const char* array, int index, const char* property, Span<const EntityRef> entities, const IVec3& value) = 0;
 	
 	virtual void addArrayPropertyItem(const struct ComponentUID& cmp, const char* property) = 0;
 	virtual void removeArrayPropertyItem(const ComponentUID& cmp, int index, const char* property) = 0;
@@ -150,7 +149,6 @@ struct LUMIX_EDITOR_API WorldEditor
 	virtual void saveUniverse(const char* basename, bool save_path) = 0;
 	virtual void newUniverse() = 0;
 	virtual void toggleGameMode() = 0;
-	virtual void setToggleSelection(bool is_toggle) = 0;
 	
 	virtual DelegateList<void()>& universeCreated() = 0;
 	virtual DelegateList<void()>& universeDestroyed() = 0;

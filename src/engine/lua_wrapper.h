@@ -12,6 +12,9 @@
 
 namespace Lumix
 {
+
+struct Universe;
+
 namespace LuaWrapper
 {
 
@@ -125,6 +128,12 @@ void get(lua_State* L, const char* head, Args... tail) {
 	get_tail(L, tail...);
 }
 
+inline int getField(lua_State* L, int idx, const char* k)
+{
+	lua_getfield(L, idx, k);
+	return lua_type(L, -1);
+}
+
 template <typename T> inline bool isType(lua_State* L, int index)
 {
 	return lua_islightuserdata(L, index) != 0;
@@ -147,12 +156,18 @@ template <> inline bool isType<u8>(lua_State* L, int index)
 }
 template <> inline bool isType<EntityRef>(lua_State* L, int index)
 {
-	if (lua_isnumber(L, index) == 0) return false;
-	return lua_tointeger(L, index) >= 0;
+	if (lua_istable(L, index) == 0) return false;
+	const bool is_entity = getField(L, index, "_entity") == LUA_TNUMBER;
+	lua_pop(L, 1);
+	return is_entity;
 }
 template <> inline bool isType<EntityPtr>(lua_State* L, int index)
 {
-	return lua_isnumber(L, index) != 0;
+	if (lua_istable(L, index) == 0) return false;
+	const int type = getField(L, index, "_entity");
+	const bool is_entity = type == LUA_TNUMBER || type == LUA_TNIL;
+	lua_pop(L, 1);
+	return is_entity;
 }
 template <> inline bool isType<ComponentType>(lua_State* L, int index)
 {
@@ -234,11 +249,24 @@ template <> inline u8 toType(lua_State* L, int index)
 }
 template <> inline EntityRef toType(lua_State* L, int index)
 {
-	return {(int)lua_tointeger(L, index)};
+	if (getField(L, index, "_entity") == LUA_TNUMBER) {
+		const EntityRef e = {(i32)lua_tointeger(L, -1)};
+		lua_pop(L, 1);
+		return e;
+	}
+	lua_pop(L, 1);
+	ASSERT(false);
+	return {};
 }
 template <> inline EntityPtr toType(lua_State* L, int index)
 {
-	return {(int)lua_tointeger(L, index)};
+	if (getField(L, index, "_entity") == LUA_TNUMBER) {
+		const EntityRef e = {(i32)lua_tointeger(L, -1)};
+		lua_pop(L, 1);
+		return e;
+	}
+	lua_pop(L, 1);
+	return INVALID_ENTITY;
 }
 template <> inline ComponentType toType(lua_State* L, int index)
 {
@@ -375,7 +403,8 @@ template <> inline float toType(lua_State* L, int index)
 }
 template <> inline const char* toType(lua_State* L, int index)
 {
-	return lua_tostring(L, index);
+	const char* res = lua_tostring(L, index);
+	return res ? res : "";
 }
 template <> inline void* toType(lua_State* L, int index)
 {
@@ -394,11 +423,17 @@ template <typename T> inline bool checkField(lua_State* L, int idx, const char* 
 	return true;
 }
 
-
-inline int getField(lua_State* L, int idx, const char* k)
+inline bool checkStringField(lua_State* L, int idx, const char* k, Span<char> out)
 {
 	lua_getfield(L, idx, k);
-	return lua_type(L, -1);
+	if(!isType<const char*>(L, -1)) {
+		lua_pop(L, 1);
+		return false;
+	}
+	const char* tmp = toType<const char*>(L, -1);
+	copyString(out, tmp);
+	lua_pop(L, 1);
+	return true;
 }
 
 template <typename T, typename F> bool forEachArrayItem(lua_State* L, int index, const char* error_msg, F&& func)
@@ -474,11 +509,11 @@ template <> inline const char* typeToString<float>()
 	return "number|float";
 }
 
-template <typename T> inline void push(lua_State* L, T value)
+template <typename T> inline void push(lua_State* L, T* value)
 {
 	lua_pushlightuserdata(L, value);
 }
-template <> inline void push(lua_State* L, float value)
+inline void push(lua_State* L, float value)
 {
 	lua_pushnumber(L, value);
 }
@@ -486,15 +521,51 @@ template <typename T> inline void push(lua_State* L, const T* value)
 {
 	lua_pushlightuserdata(L, (T*)value);
 }
-template <> inline void push(lua_State* L, EntityRef value)
+inline void push(lua_State* L, EntityRef value)
 {
 	lua_pushinteger(L, value.index);
 }
-template <> inline void push(lua_State* L, EntityPtr value)
+
+inline bool toEntity(lua_State* L, int idx, Ref<Universe*> universe, Ref<EntityRef> entity)
 {
-	lua_pushinteger(L, value.index);
+	if (!lua_istable(L, idx)) return false;
+	if (getField(L, 1, "_entity") != LUA_TNUMBER) {
+		lua_pop(L, 1);
+		return false;
+	}
+	entity = EntityRef {toType<i32>(L, -1)};
+	lua_pop(L, 1);
+
+	if (getField(L, 1, "_universe") != LUA_TLIGHTUSERDATA) {
+		lua_pop(L, 1);
+		return false;
+	}
+	universe = toType<Universe*>(L, -1);
+	lua_pop(L, 1);
+	
+	return true;
 }
-template <> inline void push(lua_State* L, ComponentType value)
+
+inline void pushEntity(lua_State* L, EntityPtr value, Universe* universe)
+{
+	if (!value.isValid()) {
+		lua_newtable(L); // [env, {}]
+		return;
+	}
+
+	lua_getglobal(L, "Lumix"); // [Lumix]
+	lua_getfield(L, -1, "Entity"); // [Lumix, Lumix.Entity]
+	lua_remove(L, -2); // [Lumix.Entity]
+	lua_getfield(L, -1, "new"); // [Lumix.Entity, Entity.new]
+	lua_pushvalue(L, -2); // [Lumix.Entity, Entity.new, Lumix.Entity]
+	lua_remove(L, -3); // [Entity.new, Lumix.Entity]
+	lua_pushlightuserdata(L, universe); // [Entity.new, Lumix.Entity, universe]
+	lua_pushnumber(L, value.index); // [Entity.new, Lumix.Entity, universe, entity_index]
+	const bool error = !LuaWrapper::pcall(L, 3, 1); // [entity]
+	ASSERT(!error);
+}
+
+inline void push(lua_State* L, ComponentType value)
 {
 	lua_pushinteger(L, value.index);
 }
@@ -599,35 +670,35 @@ inline void push(lua_State* L, const Quat& value)
 	lua_pushnumber(L, value.w);
 	lua_rawseti(L, -2, 4);
 }
-template <> inline void push(lua_State* L, bool value)
+inline void push(lua_State* L, bool value)
 {
 	lua_pushboolean(L, value);
 }
-template <> inline void push(lua_State* L, const char* value)
+inline void push(lua_State* L, const char* value)
 {
 	lua_pushstring(L, value);
 }
-template <> inline void push(lua_State* L, char* value)
+inline void push(lua_State* L, char* value)
 {
 	lua_pushstring(L, value);
 }
-template <> inline void push(lua_State* L, int value)
+inline void push(lua_State* L, int value)
 {
 	lua_pushinteger(L, value);
 }
-template <> inline void push(lua_State* L, u16 value)
+inline void push(lua_State* L, u16 value)
 {
 	lua_pushinteger(L, value);
 }
-template <> inline void push(lua_State* L, u8 value)
+inline void push(lua_State* L, u8 value)
 {
 	lua_pushinteger(L, value);
 }
-template <> inline void push(lua_State* L, unsigned int value)
+inline void push(lua_State* L, unsigned int value)
 {
 	lua_pushinteger(L, value);
 }
-template <> inline void push(lua_State* L, u64 value)
+inline void push(lua_State* L, u64 value)
 {
 	lua_pushinteger(L, value);
 }

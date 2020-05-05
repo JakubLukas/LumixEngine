@@ -791,9 +791,8 @@ public:
 		for (auto& r : m_model_instances)
 		{
 			serializer.write(r.flags.base);
-			if(r.flags.isSet(ModelInstance::VALID))
-			{
-				serializer.write(r.model ? r.model->getPath().getHash() : 0);
+			if(r.flags.isSet(ModelInstance::VALID)) {
+				serializer.writeString(r.model ? r.model->getPath().c_str() : "");
 			}
 			
 		}
@@ -1040,12 +1039,12 @@ public:
 		}
 	}
 
-	void deserializeModelInstances(IInputStream& serializer, const EntityMap& entity_map)
+	void deserializeModelInstances(InputMemoryStream& serializer, const EntityMap& entity_map)
 	{
 		u32 size = 0;
 		serializer.read(size);
-		m_model_instances.reserve(size + m_model_instances.size());
-		m_mesh_sort_data.reserve(size + m_mesh_sort_data.size());
+		m_model_instances.reserve(nextPow2(size + m_model_instances.size()));
+		m_mesh_sort_data.reserve(nextPow2(size + m_mesh_sort_data.size()));
 		for (u32 i = 0; i < size; ++i) {
 			FlagSet<ModelInstance::Flags, u8> flags;
 			serializer.read(flags);
@@ -1068,10 +1067,10 @@ public:
 				r.meshes = nullptr;
 				r.mesh_count = 0;
 
-				u32 path;
-				serializer.read(path);
+				char path[MAX_PATH_LENGTH];
+				copyString(path, serializer.readString());
 
-				if (path != 0) {
+				if (path[0] != 0) {
 					Model* model = m_engine.getResourceManager().load<Model>(Path(path));
 					setModel(e, model);
 				}
@@ -1420,8 +1419,11 @@ public:
 
 		if (m_culling_system->isAdded(entity)) {
 			if (m_universe.hasComponent(entity, MODEL_INSTANCE_TYPE)) {
-				const DVec3 position = m_universe.getPosition(entity);
-				m_culling_system->setPosition(entity, position);
+				const Transform& tr = m_universe.getTransform(entity);
+				const Model* model = m_model_instances[entity.index].model;
+				ASSERT(model);
+				const float bounding_radius = model->getBoundingRadius();
+				m_culling_system->set(entity, tr.pos, bounding_radius * tr.scale);
 			}
 			else if (m_universe.hasComponent(entity, DECAL_TYPE)) {
 				auto iter = m_decals.find(entity);
@@ -1660,7 +1662,7 @@ public:
 			if (!model_instance.model || !model_instance.model->isReady()) return;
 
 			const DVec3 pos = m_universe.getPosition(entity);
-			const float radius = model_instance.model->getBoundingRadius();
+			const float radius = model_instance.model->getBoundingRadius() * m_universe.getScale(entity);
 			if (!m_culling_system->isAdded(entity)) {
 				const RenderableTypes type = getRenderableType(*model_instance.model);
 				m_culling_system->add(entity, (u8)type, pos, radius);
@@ -2304,7 +2306,6 @@ public:
 		return hit;
 	}
 
-
 	RayCastModelHit castRay(const DVec3& origin, const Vec3& dir, EntityPtr ignored_model_instance) override
 	{
 		PROFILE_FUNCTION();
@@ -2324,9 +2325,9 @@ public:
 			const double dist = (pos - origin).length();
 			if (dist - radius > cur_dist) continue;
 			
-			Vec3 intersection;
+			float intersection_t;
 			const Vec3 rel_pos = (origin - pos).toFloat();
-			if (getRaySphereIntersection(rel_pos, dir, Vec3::ZERO, radius, intersection)) {
+			if (getRaySphereIntersection(rel_pos, dir, Vec3::ZERO, radius, Ref(intersection_t)) && intersection_t >= 0) {
 				RayCastModelHit new_hit = r.model->castRay(rel_pos / scale, dir, r.pose);
 				if (new_hit.is_hit && (!hit.is_hit || new_hit.t * scale < hit.t)) {
 					new_hit.entity = entity;
@@ -2353,7 +2354,6 @@ public:
 		hit.dir = dir;
 		return hit;
 	}
-
 	
 	Vec4 getShadowmapCascades(EntityRef entity) override
 	{
@@ -2989,7 +2989,7 @@ void RenderScene::registerLuaAPI(lua_State* L)
 
 	REGISTER_FUNCTION(setGlobalLODMultiplier);
 	REGISTER_FUNCTION(getGlobalLODMultiplier);
-	REGISTER_FUNCTION(getActiveEnvironment);
+	//REGISTER_FUNCTION(getActiveEnvironment);
 	REGISTER_FUNCTION(getModelInstanceModel);
 	REGISTER_FUNCTION(addDebugCross);
 	REGISTER_FUNCTION(addDebugLine);

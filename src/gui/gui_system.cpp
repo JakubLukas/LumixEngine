@@ -94,10 +94,30 @@ struct GUISystemImpl final : GUISystem
 				}
 			}
 		};
+		
+		struct CursorEnum : Reflection::EnumAttribute {
+			u32 count(ComponentUID cmp) const override { return 7; }
+			const char* name(ComponentUID cmp, u32 idx) const override {
+				switch((OS::CursorType)idx) {
+					case OS::CursorType::UNDEFINED: return "Ignore";
+					case OS::CursorType::DEFAULT: return "Default";
+					case OS::CursorType::LOAD: return "Load";
+					case OS::CursorType::SIZE_NS: return "Size NS";
+					case OS::CursorType::SIZE_NWSE: return "Size NWSE";
+					case OS::CursorType::SIZE_WE: return "Size WE";
+					case OS::CursorType::TEXT_INPUT: return "Text input";
+					default: ASSERT(false); return "N/A";
+				}
+			}
+		};
 
 		static auto lua_scene = scene("gui",
+			functions(
+				LUMIX_FUNC(GUIScene::getRectAt),
+				LUMIX_FUNC(GUIScene::isOver)
+			),
 			component("gui_text",
-				property("Text", LUMIX_PROP(GUIScene, Text)),
+				property("Text", LUMIX_PROP(GUIScene, Text), MultilineAttribute()),
 				property("Font", LUMIX_PROP(GUIScene, TextFontPath), ResourceAttribute("Font (*.ttf)", FontResource::TYPE)),
 				property("Font Size", LUMIX_PROP(GUIScene, TextFontSize)),
 				enum_property("Horizontal align", LUMIX_PROP(GUIScene, TextHAlign), TextHAlignEnum()),
@@ -107,8 +127,8 @@ struct GUISystemImpl final : GUISystem
 			component("gui_input_field"),
 			component("gui_canvas"),
 			component("gui_button",
-				property("Normal color", LUMIX_PROP(GUIScene, ButtonNormalColorRGBA), ColorAttribute()),
-				property("Hovered color", LUMIX_PROP(GUIScene, ButtonHoveredColorRGBA), ColorAttribute())
+				property("Hovered color", LUMIX_PROP(GUIScene, ButtonHoveredColorRGBA), ColorAttribute()),
+				enum_property("Cursor", LUMIX_PROP(GUIScene, ButtonHoveredCursor), CursorEnum())
 			),
 			component("gui_image",
 				property("Enabled", &GUIScene::isImageEnabled, &GUIScene::enableImage),
@@ -155,11 +175,20 @@ struct GUISystemImpl final : GUISystem
 		GUIScene::destroyInstance(static_cast<GUIScene*>(scene));
 	}
 
+	static int LUA_enableCursor(lua_State* L) {
+		const bool enable = LuaWrapper::checkArg<bool>(L, 1);
+		const int index = lua_upvalueindex(1);
+		GUISystemImpl* system = LuaWrapper::toType<GUISystemImpl*>(L, index);
+		system->enableCursor(enable);
+		return 0;
+	}
 
 	static int LUA_GUIRect_getScreenRect(lua_State* L)
 	{
-		GUIScene* scene = LuaWrapper::checkArg<GUIScene*>(L, 1);
-		EntityRef e = LuaWrapper::checkArg<EntityRef>(L, 2);
+		EntityRef e;
+		Universe* universe;
+		if (!LuaWrapper::toEntity(L, 1, Ref(universe), Ref(e))) return 0;
+		GUIScene* scene = (GUIScene*)universe->getScene(crc32("gui"));
 		GUIScene::Rect rect = scene->getRect(e);
 		lua_newtable(L);
 		LuaWrapper::push(L, rect.x);
@@ -187,15 +216,18 @@ struct GUISystemImpl final : GUISystem
 		REGISTER_FUNCTION(enableCursor);
 
 		LuaWrapper::createSystemFunction(L, "Gui", "getScreenRect", LUA_GUIRect_getScreenRect);
+		LuaWrapper::createSystemClosure(L, "Gui", this, "enableCursor", LUA_enableCursor);
 
 		LuaWrapper::createSystemVariable(L, "Gui", "instance", this);
 
 		#undef REGISTER_FUNCTION
 	}
 
+	void setCursor(OS::CursorType type) override {
+		if (m_interface) m_interface->setCursor(type);
+	}
 
-	void enableCursor(bool enable) override
-	{
+	void enableCursor(bool enable) override {
 		if (m_interface) m_interface->enableCursor(enable);
 	}
 
@@ -219,16 +251,7 @@ struct GUISystemImpl final : GUISystem
 		Pipeline* pipeline = m_interface->getPipeline();
 		auto* scene = (GUIScene*)pipeline->getScene()->getUniverse().getScene(crc32("gui"));
 		Vec2 size = m_interface->getSize();
-		scene->render(*pipeline, size);
-	}
-
-
-	void renderNewUI()
-	{
-		Pipeline* pipeline = m_interface->getPipeline();
-		auto* scene = (GUIScene*)pipeline->getScene()->getUniverse().getScene(crc32("gui"));
-		Vec2 size =  m_interface->getSize();
-		scene->render(*pipeline, size);
+		scene->render(*pipeline, size, true);
 	}
 
 
@@ -241,6 +264,9 @@ struct GUISystemImpl final : GUISystem
 
 	const char* getName() const override { return "gui"; }
 
+	u32 getVersion() const override { return 0; }
+	void serialize(OutputMemoryStream& stream) const override {}
+	bool deserialize(u32 version, InputMemoryStream& stream) override { return version == 0; }
 
 	Engine& m_engine;
 	SpriteManager m_sprite_manager;

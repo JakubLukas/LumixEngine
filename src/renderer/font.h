@@ -5,6 +5,7 @@
 #include "engine/delegate_list.h"
 #include "engine/resource.h"
 #include "engine/resource_manager.h"
+#include "engine/stream.h"
 #include "renderer/draw2d.h"
 
 
@@ -27,6 +28,9 @@ struct Glyph {
 
 LUMIX_RENDERER_API Vec2 measureTextA(const Font& font, const char* str, const char* str_end);
 LUMIX_RENDERER_API const Glyph* findGlyph(const Font& font, u32 codepoint);
+LUMIX_RENDERER_API float getAdvanceY(const Font& font);
+LUMIX_RENDERER_API float getDescender(const Font& font);
+LUMIX_RENDERER_API float getAscender(const Font& font);
 
 
 struct LUMIX_RENDERER_API FontResource final : Resource
@@ -40,7 +44,7 @@ struct LUMIX_RENDERER_API FontResource final : Resource
 	Font* addRef(int font_size);
 	void removeRef(Font& font);
 
-	Array<u8> file_data;
+	OutputMemoryStream file_data;
 	static const ResourceType TYPE;
 };
 
