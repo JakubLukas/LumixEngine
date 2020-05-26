@@ -9,11 +9,11 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 #ifdef _WIN32
-	typedef unsigned long long u64;
-	typedef long long i64;
-#else
+	typedef long long i64;	
+	typedef unsigned long long u64;	
+#else	
+	typedef long i64;	
 	typedef unsigned long u64;
-	typedef long i64;
 #endif
 
 static_assert(sizeof(u8) == 1, "u8 is not 1 byte");
@@ -22,9 +22,13 @@ static_assert(sizeof(u64) == 8, "u64 is not 8 bytes");
 static_assert(sizeof(i64) == 8, "i64 is not 8 bytes");
 
 
+using JobFunction = void (*)(void*);
+using JobProcessor = void (*)(JobFunction, void*, void*, u32, u32);
+
 enum class LoadFlags : u64 {
 	TRIANGULATE = 1 << 0,
 	IGNORE_GEOMETRY = 1 << 1,
+	IGNORE_BLEND_SHAPES = 1 << 2,
 };
 
 
@@ -157,6 +161,7 @@ struct Object
 	{
 		ROOT,
 		GEOMETRY,
+		SHAPE,
 		MATERIAL,
 		MESH,
 		TEXTURE,
@@ -165,6 +170,8 @@ struct Object
 		NODE_ATTRIBUTE,
 		CLUSTER,
 		SKIN,
+		BLEND_SHAPE,
+		BLEND_SHAPE_CHANNEL,
 		ANIMATION_STACK,
 		ANIMATION_LAYER,
 		ANIMATION_CURVE,
@@ -283,6 +290,29 @@ struct Skin : Object
 };
 
 
+struct BlendShapeChannel : Object
+{
+	static const Type s_type = Type::BLEND_SHAPE_CHANNEL;
+
+	BlendShapeChannel(const Scene& _scene, const IElement& _element);
+
+	virtual double getDeformPercent() const = 0;
+	virtual int getShapeCount() const = 0;
+	virtual const struct Shape* getShape(int idx) const = 0;
+};
+
+
+struct BlendShape : Object
+{
+	static const Type s_type = Type::BLEND_SHAPE;
+
+	BlendShape(const Scene& _scene, const IElement& _element);
+
+	virtual int getBlendShapeChannelCount() const = 0;
+	virtual const BlendShapeChannel* getBlendShapeChannel(int idx) const = 0;
+};
+
+
 struct NodeAttribute : Object
 {
 	static const Type s_type = Type::NODE_ATTRIBUTE;
@@ -311,7 +341,21 @@ struct Geometry : Object
 	virtual const Vec4* getColors() const = 0;
 	virtual const Vec3* getTangents() const = 0;
 	virtual const Skin* getSkin() const = 0;
+	virtual const BlendShape* getBlendShape() const = 0;
 	virtual const int* getMaterials() const = 0;
+};
+
+
+struct Shape : Object
+{
+	static const Type s_type = Type::SHAPE;
+
+	Shape(const Scene& _scene, const IElement& _element);
+
+	virtual const Vec3* getVertices() const = 0;
+	virtual int getVertexCount() const = 0;
+
+	virtual const Vec3* getNormals() const = 0;
 };
 
 
@@ -469,7 +513,7 @@ protected:
 };
 
 
-IScene* load(const u8* data, int size, u64 flags);
+IScene* load(const u8* data, int size, u64 flags, JobProcessor job_processor = nullptr, void* job_user_ptr = nullptr);
 const char* getError();
 double fbxTimeToSeconds(i64 value);
 i64 secondsToFbxTime(double value);

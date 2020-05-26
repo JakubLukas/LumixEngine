@@ -119,6 +119,7 @@ enum class TextureFormat : u32 {
 	R16F,
 	R16,
 	R32F,
+	RG32F,
 	SRGB,
 	SRGBA
 };
@@ -132,12 +133,14 @@ enum class TextureFlags : u32 {
 	NO_MIPS = 1 << 4,
 	SRGB = 1 << 5,
 	READBACK = 1 << 6,
-	IS_3D = 1 << 7
+	IS_3D = 1 << 7,
+	IS_CUBE = 1 << 8
 };
 
 enum class BufferFlags : u32 {
 	IMMUTABLE = 1 << 0,
-	UNIFORM_BUFFER = 1 << 1
+	UNIFORM_BUFFER = 1 << 1,
+	SHADER_BUFFER = 1 << 2
 };
 
 enum class DataType {
@@ -230,12 +233,14 @@ void createBufferGroup(BufferGroupHandle handle, u32 flags, size_t element_size,
 void createBuffer(BufferHandle handle, u32 flags, size_t size, const void* data);
 bool createTexture(TextureHandle handle, u32 w, u32 h, u32 depth, TextureFormat format, u32 flags, const void* data, const char* debug_name);
 void createTextureView(TextureHandle view, TextureHandle texture);
+void generateMipmaps(TextureHandle handle);
 bool loadTexture(TextureHandle handle, const void* data, int size, u32 flags, const char* debug_name);
-void update(TextureHandle texture, u32 level, u32 x, u32 y, u32 w, u32 h, TextureFormat format, void* buf);
+void update(TextureHandle texture, u32 level, u32 slice, u32 x, u32 y, u32 w, u32 h, TextureFormat format, void* buf);
 QueryHandle createQuery();
 
 void bindVertexBuffer(u32 binding_idx, BufferHandle buffer, u32 buffer_offset, u32 stride_offset);
 void bindTextures(const TextureHandle* handles, u32 offset, u32 count);
+void bindShaderBuffer(BufferHandle buffer, u32 binding_point);
 void update(BufferHandle buffer, const void* data, size_t size);
 void update(BufferGroupHandle group, const void* data, size_t element_index);
 void* map(BufferHandle buffer, size_t size);
@@ -243,7 +248,7 @@ void unmap(BufferHandle buffer);
 void bindUniformBuffer(u32 ub_index, BufferHandle buffer, size_t size);
 void bindUniformBuffer(u32 ub_index, BufferGroupHandle group, size_t element_index);
 void copy(TextureHandle dst, TextureHandle src);
-void readTexture(TextureHandle texture, Span<u8> buf);
+void readTexture(TextureHandle texture, u32 mip, Span<u8> buf);
 TextureInfo getTextureInfo(const void* data);
 void queryTimestamp(QueryHandle query);
 u64 getQueryResult(QueryHandle query);
@@ -266,6 +271,7 @@ void drawTriangleStripArraysInstanced(u32 indices_count, u32 instances_count);
 void pushDebugGroup(const char* msg);
 void popDebugGroup();
 
+void setFramebufferCube(TextureHandle cube, u32 face, u32 mip);
 void setFramebuffer(TextureHandle* attachments, u32 num, u32 flags);
 
 inline u32 getBytesPerPixel(gpu::TextureFormat format) {

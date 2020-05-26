@@ -3,7 +3,7 @@
 
 [![Build Status](https://github.com/nem0/lumixengine/workflows/build/badge.svg)](https://github.com/nem0/lumixengine/actions)
 [![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/nem0/LumixEngine?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
-[![Discord Chat](https://img.shields.io/discord/480318777943392266.svg)](https://discord.gg/pS4kZB) 
+[![Discord Chat](https://img.shields.io/discord/480318777943392266.svg)](https://discord.gg/RgFybs6) 
 [![License](http://img.shields.io/:license-mit-blue.svg)](http://doge.mit-license.org)
 [![Twitter](https://img.shields.io/twitter/url/http/shields.io.svg?style=social)](https://twitter.com/mikulasflorek)
 
@@ -15,7 +15,6 @@ HEAD of master is not stable, for stable version use [this](https://github.com/n
 * [Features](https://github.com/nem0/LumixEngine/wiki/Features)
 * [Videos](https://www.youtube.com/channel/UCtjtIy0ldsq-9siM1Gm_rXg/videos)
 * [Plugins](https://github.com/nem0/LumixEngine/wiki/available-plugins)
-* [Roadmap](https://github.com/nem0/LumixEngine/milestones)
 
 ![Editor screenshot](https://user-images.githubusercontent.com/153526/29975939-9c3db48e-8f38-11e7-80f1-2a777e7a43c8.png)
 
@@ -32,7 +31,6 @@ Who is using it?
 * [PhysX](https://developer.nvidia.com/physx-sdk)
 * [dear imgui](https://github.com/ocornut/imgui)
 * [stb](https://github.com/nothings/stb)
-* [cmft](https://github.com/dariomanesku/cmft)
 * [lent](https://github.com/nem0/lent/)
 * [lucy](https://github.com/nem0/lucy_job_system)
 * [freetype](https://github.com/aseprite/freetype2)
@@ -42,3 +40,7 @@ Project generator
 * [Genie](https://github.com/bkaradzic/genie)
 
 Contact: mikulas.florek@gamedev.sk
+
+[Gitter](https://gitter.im/nem0/LumixEngine)
+
+[Discord](https://discord.gg/RgFybs6)

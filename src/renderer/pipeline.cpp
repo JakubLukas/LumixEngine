@@ -253,7 +253,7 @@ struct MTBucketArray
 
 
 static const float SHADOW_CAM_NEAR = 50.0f;
-static const float SHADOW_CAM_FAR = 5000.0f;
+static const float SHADOW_CAM_FAR = 500.0f;
 
 
 ResourceType PipelineResource::TYPE("pipeline");
@@ -362,6 +362,8 @@ struct PipelineImpl final : Pipeline
 
 		m_base_vertex_decl.addAttribute(0, 0, 3, gpu::AttributeType::FLOAT, 0);
 		m_base_vertex_decl.addAttribute(1, 12, 4, gpu::AttributeType::U8, gpu::Attribute::NORMALIZED);
+
+		m_simple_cube_decl.addAttribute(0, 0, 3, gpu::AttributeType::FLOAT, 0);
 
 		m_decal_decl.addAttribute(0, 0, 3, gpu::AttributeType::FLOAT, 0);
 		m_decal_decl.addAttribute(1, 0, 3, gpu::AttributeType::FLOAT, gpu::Attribute::INSTANCED);
@@ -1079,6 +1081,7 @@ struct PipelineImpl final : Pipeline
 			{"r16", gpu::TextureFormat::R16},
 			{"r8", gpu::TextureFormat::R8},
 			{"r32f", gpu::TextureFormat::R32F},
+			{"rg32f", gpu::TextureFormat::RG32F},
 		};
 
 		for (auto& i : FORMATS)
@@ -1460,115 +1463,6 @@ struct PipelineImpl final : Pipeline
 
 		return 0;
 	};
-
-	static int renderEnvProbeVolumes(lua_State* L)
-	{
-		const int pipeline_idx = lua_upvalueindex(1);
-		if (lua_type(L, pipeline_idx) != LUA_TLIGHTUSERDATA) {
-			LuaWrapper::argError<PipelineImpl*>(L, pipeline_idx);
-		}
-		PipelineImpl* pipeline = LuaWrapper::toType<PipelineImpl*>(L, pipeline_idx);
-		const int shader_id = LuaWrapper::checkArg<int>(L, 1);
-		const bool specular = LuaWrapper::checkArg<bool>(L, 3);
-		const bool weights = LuaWrapper::checkArg<bool>(L, 4);
-		Shader* shader = [&] {
-			for (const ShaderRef& s : pipeline->m_shaders) {
-				if(s.id == shader_id) {
-					return s.res;
-				}
-			}
-			return (Shader*)nullptr;
-		}();
-		if (!shader) {
-			return luaL_error(L, "Unknown shader id %d in renderEnvProbeVolumes.", shader_id);
-		}
-		const CameraParams cp = checkCameraParams(L, 2);
-		
-		struct Cmd : Renderer::RenderJob
-		{
-			struct Probe
-			{
-				Vec3 pos;
-				gpu::TextureHandle texture;
-			};
-
-			Cmd(IAllocator& allocator) : m_probes(allocator) {}
-
-			void setup() override
-			{
-				RenderScene* scene = m_pipeline->getScene();
-				scene->getEnvironmentProbes(m_probes);
-				
-				for (i32 i = m_probes.size() - 1; i >= 0; --i) {
-					const EnvProbeInfo& probe = m_probes[i]; 
-					if (!probe.radiance.isValid() && m_specular) m_probes.swapAndPop(i);
-					else if (!probe.use_irradiance && !m_specular) m_probes.swapAndPop(i);
-				}
-			}
-
-
-			void execute() override
-			{
-				PROFILE_FUNCTION();
-				if(m_probes.empty()) return;
-
-				gpu::useProgram(m_program);
-				gpu::bindIndexBuffer(m_ib);
-				gpu::bindVertexBuffer(0, m_vb, 0, 12);
-				gpu::bindVertexBuffer(1, gpu::INVALID_BUFFER, 0, 0);
-				const DVec3 cam_pos = m_camera_params.pos;
-				const u64 blend_state = gpu::getBlendStateBits(gpu::BlendFactors::ONE, gpu::BlendFactors::ONE, gpu::BlendFactors::ONE, gpu::BlendFactors::ONE);
-				for (const EnvProbeInfo& probe : m_probes) {
-					Vec4* dc_mem = (Vec4*)gpu::map(m_pipeline->m_drawcall_ub, sizeof(Vec4) * 11);
-					dc_mem[0] = Vec4((probe.position - cam_pos).toFloat(), 0);
-					dc_mem[1] = Vec4(probe.half_extents, 0);
-					if (m_specular) {
-						gpu::bindTextures(&probe.radiance, 15, 1);
-					}
-					else {
-						for (u32 i = 0; i < 9; ++i) {
-							dc_mem[2 + i] = Vec4(probe.sh_coefs[i], 0);
-						}
-					}
-
-					gpu::unmap(m_pipeline->m_drawcall_ub);
-					
-					const bool intersecting = m_camera_params.frustum.intersectNearPlane(probe.position, probe.half_extents.length());
-					const u64 state = intersecting
-						? (u64)gpu::StateFlags::CULL_FRONT
-						: (u64)gpu::StateFlags::DEPTH_TEST | (u64)gpu::StateFlags::CULL_BACK;
-					gpu::setState(state | blend_state);
-					gpu::drawTriangles(36, gpu::DataType::U16);
-				}
-			}
-
-			gpu::BufferHandle m_ib;
-			gpu::BufferHandle m_vb;
-			CameraParams m_camera_params;
-			PipelineImpl* m_pipeline;
-			bool m_specular;
-			Array<EnvProbeInfo> m_probes;
-			gpu::ProgramHandle m_program;
-		};
-
-		if(shader->isReady()) {
-			IAllocator& allocator = pipeline->m_renderer.getAllocator();
-			Cmd* cmd = LUMIX_NEW(allocator, Cmd)(allocator);
-			cmd->m_pipeline = pipeline;
-			const u32 specular_mask = 1 << pipeline->m_renderer.getShaderDefineIdx("_LUMIX_SPECULAR");
-			const u32 weights_mask = 1 << pipeline->m_renderer.getShaderDefineIdx("_LUMIX_WEIGHTS");
-			u32 def_mask = specular ? specular_mask : 0;
-			def_mask |= weights ? weights_mask : 0;
-			cmd->m_program = shader->getProgram(pipeline->m_3D_pos_decl, def_mask);
-			cmd->m_specular = specular;
-			cmd->m_ib = pipeline->m_cube_ib;
-			cmd->m_vb = pipeline->m_cube_vb;
-			cmd->m_camera_params = cp;
-			pipeline->m_renderer.queue(cmd, pipeline->m_profiler_link);
-		}
-		return 0;
-	}
-
 
 	static int pass(lua_State* L)
 	{
@@ -2068,98 +1962,6 @@ struct PipelineImpl final : Pipeline
 		m_renderer.queue(job, m_profiler_link);
 	}
 
-	static int renderLightProbeGrids(lua_State* L) {
-		const int pipeline_idx = lua_upvalueindex(1);
-		if (lua_type(L, pipeline_idx) != LUA_TLIGHTUSERDATA) {
-			LuaWrapper::argError<PipelineImpl*>(L, pipeline_idx);
-		}
-		PipelineImpl* pipeline = LuaWrapper::toType<PipelineImpl*>(L, pipeline_idx);
-
-		const int shader_idx = LuaWrapper::checkArg<int>(L, 1);
-		const CameraParams& cp = checkCameraParams(L, 2);
-
-		Shader* shader = [&]() -> Shader* {
-			for (const ShaderRef& s : pipeline->m_shaders) {
-				if(s.id == shader_idx) {
-					return ((Shader*)s.res);
-				}
-			}
-			return nullptr;
-		}();
-
-		if (!shader || !shader->isReady()) return 0;
-
-		struct RenderJob : Renderer::RenderJob {
-			RenderJob(IAllocator& allocator)
-				: m_grids(allocator)
-			{}
-			
-			struct Grid {
-				DVec3 position;
-				IVec3 resolution;
-				Vec3 half_extents;
-				bool intersect_cam;
-				gpu::TextureHandle spherical_harmonics[7];
-			};
-
-			void setup() override {
-				RenderScene* scene = m_pipeline->getScene();
-				Universe& universe = scene->getUniverse();
-				Span<LightProbeGrid> grids = scene->getLightProbeGrids();
-				m_grids.reserve(grids.length());
-				for (const LightProbeGrid& grid : grids) {
-					Grid& g = m_grids.emplace();
-					g.half_extents = grid.half_extents;
-					g.resolution = grid.resolution;
-					g.position = universe.getPosition(grid.entity);
-					g.intersect_cam = (g.position - m_cam_pos).squaredLength() < dotProduct(g.half_extents, g.half_extents);
-					for (u32 i = 0; i < lengthOf(g.spherical_harmonics); ++i) {
-						g.spherical_harmonics[i] = grid.data[i]->handle;
-					}
-				}
-			}
-			
-			void execute() override {
-				PROFILE_FUNCTION();
-				gpu::useProgram(m_program);
-				gpu::bindIndexBuffer(m_pipeline->m_cube_ib);
-				gpu::bindVertexBuffer(0, m_pipeline->m_cube_vb, 0, 12);
-				gpu::bindVertexBuffer(1, gpu::INVALID_BUFFER, 0, 0);
-				for (const Grid& g : m_grids) {
-					gpu::bindTextures(g.spherical_harmonics, 4, lengthOf(g.spherical_harmonics));
-					if (g.intersect_cam) {
-						gpu::setState((u64)gpu::StateFlags::CULL_FRONT);
-					}
-					else {
-						gpu::setState((u64)gpu::StateFlags::CULL_BACK | (u64)gpu::StateFlags::DEPTH_TEST);
-					}
-					
-					Vec4* dc_mem = (Vec4*)gpu::map(m_pipeline->m_drawcall_ub, 3 * sizeof(Vec4));
-					memcpy(dc_mem, &g.resolution, sizeof(g.resolution));
-					memcpy(dc_mem + 1, &g.half_extents, sizeof(g.half_extents));
-					const Vec3 pos = (g.position - m_cam_pos).toFloat();
-					memcpy(dc_mem + 2, &pos, sizeof(pos));
-					gpu::unmap(m_pipeline->m_drawcall_ub);
-					
-					gpu::drawTriangles(36, gpu::DataType::U16);
-				}
-			}
-
-			DVec3 m_cam_pos;
-			Array<Grid> m_grids;
-			gpu::ProgramHandle m_program;
-			PipelineImpl* m_pipeline;
-		};
-
-		IAllocator& allocator = pipeline->m_renderer.getAllocator();
-		RenderJob* job = LUMIX_NEW(allocator, RenderJob)(allocator);
-		job->m_pipeline = pipeline;
-		job->m_cam_pos = cp.pos;
-		job->m_program = shader->getProgram(pipeline->m_3D_pos_decl, 0);
-		pipeline->m_renderer.queue(job, pipeline->m_profiler_link);
-		return 0;
-	}
-
 	void renderLocalLights(const char* define, int shader_idx, CmdPage* cmds)
 	{
 		struct RenderJob : Renderer::RenderJob
@@ -2290,6 +2092,405 @@ struct PipelineImpl final : Pipeline
 		return rs;
 	}
 
+	struct RenderReflectionVolumesJob : Renderer::RenderJob {
+		RenderReflectionVolumesJob(IAllocator& allocator)
+			: m_probes(allocator)
+		{}
+
+		void setup() override {
+			PROFILE_FUNCTION();
+			RenderScene* scene = m_pipeline->m_scene;
+			Universe& universe = scene->getUniverse();
+			const Span<const ReflectionProbe> probes = scene->getReflectionProbes();
+			const Span<const EntityRef> entities = scene->getReflectionProbesEntities();
+
+			for (u32 i = 0, c = probes.length(); i < c; ++i) {
+				const ReflectionProbe& probe = probes[i];
+				if (!probe.flags.isSet(ReflectionProbe::ENABLED)) continue;
+				if (!probe.texture) continue;
+				if (!probe.texture->isReady()) continue;
+
+				Probe& p = m_probes.emplace();
+				p.half_extents = probe.half_extents;
+				p.texture = probe.texture->handle;
+				const EntityRef e = entities[i];
+				const DVec3 pos = universe.getPosition(e);
+				p.pos = (pos - m_camera_params.pos).toFloat();
+				p.rot = universe.getRotation(e);
+				p.intersecting = m_camera_params.frustum.intersectNearPlane(pos, p.half_extents.length());
+			}
+		}
+
+		void execute() override {
+			PROFILE_FUNCTION();
+			if(m_probes.empty()) return;
+			
+			gpu::useProgram(m_program);
+			gpu::bindIndexBuffer(m_ib);
+			gpu::bindVertexBuffer(0, m_vb, 0, 12);
+			gpu::bindVertexBuffer(1, gpu::INVALID_BUFFER, 0, 0);
+			const DVec3 cam_pos = m_camera_params.pos;
+			const u64 blend_state = gpu::getBlendStateBits(gpu::BlendFactors::ONE, gpu::BlendFactors::ONE, gpu::BlendFactors::ONE, gpu::BlendFactors::ONE);
+			for (const Probe& p : m_probes) {
+				Vec4* dc_mem = (Vec4*)gpu::map(m_pipeline->m_drawcall_ub, sizeof(Vec4) * 3);
+				dc_mem[0] = Vec4(p.pos, 0);
+				memcpy(&dc_mem[1], &p.rot, sizeof(p.rot)); 
+				dc_mem[2] = Vec4(p.half_extents, 0);
+				gpu::unmap(m_pipeline->m_drawcall_ub);
+
+				gpu::bindTextures(&p.texture, m_texture_offset, 1);
+					
+				const u64 state = p.intersecting
+					? (u64)gpu::StateFlags::CULL_FRONT
+					: (u64)gpu::StateFlags::DEPTH_TEST | (u64)gpu::StateFlags::CULL_BACK;
+				gpu::setState(state | blend_state);
+				gpu::drawTriangles(36, gpu::DataType::U16);
+			}
+		}
+
+		struct Probe {
+			gpu::TextureHandle texture;
+			Vec3 half_extents;
+			Quat rot;
+			Vec3 pos;
+			bool intersecting;
+		};
+
+		gpu::ProgramHandle m_program;
+		gpu::BufferHandle m_ib;
+		gpu::BufferHandle m_vb;
+		u32 m_texture_offset;
+		Array<Probe> m_probes;
+		PipelineImpl* m_pipeline;
+		CameraParams m_camera_params;
+	};
+
+	// TODO optimize
+	struct FillClustersJob : Renderer::RenderJob {
+		FillClustersJob(IAllocator& allocator)
+			: m_clusters(allocator)
+			, m_map(allocator)
+			, m_point_lights(allocator)
+			, m_probes(allocator)
+		{}
+
+		void setup() override {
+			PROFILE_FUNCTION();
+			const IVec3 size = {
+				(m_pipeline->m_viewport.w + 63) / 64,
+				(m_pipeline->m_viewport.h + 63) / 64,
+				16 };
+			Array<ClusterPointLight>& point_lights = m_point_lights;
+			Array<ClusterEnvProbe>& probes = m_probes;
+			Array<Cluster>& clusters = m_clusters;
+			Array<i32>& map = m_map;
+			clusters.resize(size.x * size.y * size.z);
+			for (Cluster& cluster : clusters) {
+				cluster.point_lights_count = 0;
+				cluster.probes_count = 0;
+			}
+
+			if (m_is_clear) return;
+
+			RenderScene* scene = m_pipeline->m_scene;
+			const DVec3 cam_pos = m_camera_params.pos;
+			Universe& universe = scene->getUniverse();
+			const ShiftedFrustum& frustum = m_camera_params.frustum;
+			CullResult* lights = scene->getRenderables(frustum, RenderableTypes::LOCAL_LIGHT);
+			Vec4 xplanes[65];
+			Vec4 yplanes[65];
+			Vec4 zplanes[17];
+
+			const Vec3 cam_dir = crossProduct(frustum.points[2] - frustum.points[0], frustum.points[1] - frustum.points[0]).normalized();
+			
+			Vec3 near = (frustum.points[0] + frustum.points[2]) * 0.5f;
+			Vec3 far = (frustum.points[4] + frustum.points[6]) * 0.5f;
+			
+			for (i32 i = 0; i < size.z + 1; ++i) {
+				// TODO do not hardcode constants
+				float znear = 0.1f;
+				float zfar = 10000.0f;
+				const float z = znear * powf(zfar / znear, i / (float)size.z);
+				const Vec3 p = cam_dir * z;
+				zplanes[i] = makePlane(cam_dir, p);
+			}
+
+			for (i32 i = 0; i < size.y + 1; ++i) {
+				const float t = i / (float)size.y;
+				const Vec3 a = lerp(frustum.points[0], frustum.points[3], t);
+				const Vec3 b = lerp(frustum.points[1], frustum.points[2], t);
+				const Vec3 c = lerp(frustum.points[4], frustum.points[7], t);
+				const Vec3 n = crossProduct(b - a, c - a).normalized();
+				yplanes[i] = makePlane(n, a);
+			}
+
+			for (i32 i = 0; i < size.x + 1; ++i) {
+				const float t = i / (float)size.x;
+				const Vec3 a = lerp(frustum.points[1], frustum.points[0], t);
+				const Vec3 b = lerp(frustum.points[2], frustum.points[3], t);
+				const Vec3 c = lerp(frustum.points[5], frustum.points[4], t);
+				const Vec3 n = crossProduct(b - a, c - a).normalized();
+				xplanes[i] = makePlane(n, a);
+			}
+
+			ASSERT(lengthOf(xplanes) >= (u32)size.x);
+			ASSERT(lengthOf(yplanes) >= (u32)size.y);
+
+			lights->forEach([&](EntityRef e){
+				i32 idx = point_lights.size();
+				const PointLight& pl = scene->getPointLight(e);
+				ClusterPointLight& light = point_lights.emplace();
+				light.radius = pl.range;
+				light.pos = (universe.getPosition(e) - cam_pos).toFloat();
+				light.color = pl.color * pl.intensity;
+				light.attenuation_param = pl.attenuation_param;
+			});
+
+			const Span<const EnvironmentProbe> env_probes = scene->getEnvironmentProbes();
+			const Span<EntityRef> probe_entities = scene->getEnvironmentProbesEntities();
+			for (u32 i = 0, c = env_probes.length(); i < c; ++i) {
+					const EnvironmentProbe& env_probe = env_probes[i];
+					if (!env_probe.flags.isSet(EnvironmentProbe::ENABLED)) continue;
+					const EntityRef e = probe_entities[i];
+					ClusterEnvProbe& probe =  probes.emplace();
+					probe.pos = (universe.getPosition(e) - cam_pos).toFloat();
+					probe.rot = universe.getRotation(e).conjugated();
+					probe.inner_range = env_probe.inner_range;
+					probe.outer_range = env_probe.outer_range;
+					for (u32 i = 0; i < 9; ++i) {
+						probe.sh_coefs[i] = Vec4(env_probe.sh_coefs[i], 0);
+					}
+			}
+
+			qsort(probes.begin(), probes.size(), sizeof(ClusterEnvProbe), [](const void* a, const void* b){
+				const ClusterEnvProbe* m = (const ClusterEnvProbe*)a;
+				const ClusterEnvProbe* n = (const ClusterEnvProbe*)b;
+				const float m3 = m->outer_range.x * m->outer_range.y * m->outer_range.z;
+				const float n3 = n->outer_range.x * n->outer_range.y * n->outer_range.z;
+				if (m3 < n3) return -1;
+				return m3 > n3 ? 1 : 0;
+			});
+
+			auto range = [](const Vec3& p, float r, i32 size, const Vec4* planes){
+				IVec2 range = { -1, -1 };
+				if (planeDist(planes[0], p) < -r) return range;
+					
+				for (i32 i = 0; i < size; ++i) {
+					const float d = planeDist(planes[i + 1], p);
+					if (d > r) continue;
+
+					range.x = i;
+						
+					for (i32 i2 = i + 1; i2 < size + 1; ++i2) {
+						const float d = planeDist(planes[i2], p);
+						if (d < -r) {
+							range.y = i2;
+							return range;
+						}
+					}
+					range.y = size;
+					return range;
+				}
+				return range;
+			};
+
+			auto for_each_light_pair = [&](auto f){
+				for (i32 i = 0, c = point_lights.size(); i < c; ++i) {
+					ClusterPointLight& light = point_lights[i];
+					const float r = light.radius;
+					const Vec3 p = light.pos;
+
+					const IVec2 xrange = range(p, r, size.x, xplanes);
+					const IVec2 yrange = range(p, r, size.y, yplanes);
+					const IVec2 zrange = range(p, r, size.z, zplanes);
+
+					for (i32 z = zrange.x; z < zrange.y; ++z) {
+						for (i32 y = yrange.x; y < yrange.y; ++y) {
+							for (i32 x = xrange.x; x < xrange.y; ++x) {
+								const u32 idx = x + y * size.x + z * size.x * size.y;
+								Cluster& cluster = clusters[idx];
+								f(cluster, i);
+							}
+						}
+					}
+				}
+			};
+
+			auto for_each_probe_pair = [&](auto f){
+				for (i32 i = 0, c = probes.size(); i < c; ++i) {
+					const Vec3 p = probes[i].pos;
+					const float r = probes[i].outer_range.length();
+				
+					const IVec2 xrange = range(p, r, size.x, xplanes);
+					const IVec2 yrange = range(p, r, size.y, yplanes);
+					const IVec2 zrange = range(p, r, size.z, zplanes);
+
+					for (i32 z = zrange.x; z < zrange.y; ++z) {
+						for (i32 y = yrange.x; y < yrange.y; ++y) {
+							for (i32 x = xrange.x; x < xrange.y; ++x) {
+								const u32 idx = x + y * size.x + z * size.x * size.y;
+								Cluster& cluster = clusters[idx];
+								f(cluster, i);
+							}
+						}
+					}
+				}
+			};
+
+			for_each_light_pair([](Cluster& cluster, i32 light_idx){
+				++cluster.point_lights_count;
+			});
+
+			for_each_probe_pair([](Cluster& cluster, i32 light_idx){
+				++cluster.probes_count;
+			});
+
+			u32 offset = 0;
+			for (Cluster& cluster : clusters) {
+				cluster.offset = offset;
+				offset += cluster.point_lights_count + cluster.probes_count;
+			}
+			
+			map.resize(offset);
+			
+			for_each_light_pair([&](Cluster& cluster, i32 light_idx){
+				map[cluster.offset] = light_idx;
+				++cluster.offset;
+			});
+
+			for_each_probe_pair([&](Cluster& cluster, i32 probe_idx){
+				map[cluster.offset] = probe_idx;
+				++cluster.offset;
+			});
+
+			for (Cluster& cluster : clusters) {
+				cluster.offset -= cluster.point_lights_count + cluster.probes_count;
+			}
+		}
+
+		void execute() override {
+			PROFILE_FUNCTION();
+
+			auto bind = [](auto& buffer, const auto& data, i32 idx){
+				const u32 capacity = (data.byte_size() + 15) & ~15;
+				if (buffer.capacity < capacity) {
+					if (buffer.buffer.isValid()) gpu::destroy(buffer.buffer);
+					buffer.buffer = gpu::allocBufferHandle();
+					gpu::createBuffer(buffer.buffer, (u32)gpu::BufferFlags::SHADER_BUFFER, capacity, nullptr);
+					buffer.capacity = capacity;
+				}
+				if (!data.empty()) {
+					u8* mem = (u8*)gpu::map(buffer.buffer, capacity);
+					memcpy(mem, data.begin(), data.byte_size());
+					gpu::unmap(buffer.buffer);
+					gpu::bindShaderBuffer(buffer.buffer, idx);
+				}
+			};
+
+			bind(m_pipeline->m_cluster_buffers.lights, m_point_lights, 6);
+			bind(m_pipeline->m_cluster_buffers.clusters, m_clusters, 7);
+			bind(m_pipeline->m_cluster_buffers.maps, m_map, 8);
+			bind(m_pipeline->m_cluster_buffers.probes, m_probes, 9);
+		}
+
+
+		struct Cluster {
+			u32 offset;
+			u32 point_lights_count;
+			u32 probes_count;
+		};
+
+		struct ClusterPointLight {
+			Vec3 pos;
+			float radius;
+			Vec3 color;
+			//float fov;
+			float attenuation_param;
+		};
+
+		struct ClusterEnvProbe {
+			Vec3 pos;
+			float pad0;
+			Quat rot;
+			Vec3 inner_range;
+			float pad1;
+			Vec3 outer_range;
+			float pad2;
+			Vec4 sh_coefs[9];
+		};
+
+		Array<i32> m_map;
+		Array<Cluster> m_clusters;
+		Array<ClusterPointLight> m_point_lights;
+		Array<ClusterEnvProbe> m_probes;
+
+		PipelineImpl* m_pipeline;
+		CameraParams m_camera_params;
+		bool m_is_clear = false;
+	};
+	
+	static int renderReflectionVolumes(lua_State* L) {
+
+		const int pipeline_idx = lua_upvalueindex(1);
+		if (lua_type(L, pipeline_idx) != LUA_TLIGHTUSERDATA) {
+			LuaWrapper::argError<PipelineImpl*>(L, pipeline_idx);
+		}
+		PipelineImpl* pipeline = LuaWrapper::toType<PipelineImpl*>(L, pipeline_idx);
+		LuaWrapper::checkTableArg(L, 1);
+		const CameraParams cp = checkCameraParams(L, 1);
+		const int shader_id = LuaWrapper::checkArg<int>(L, 2);
+		const u32 texture_offset = LuaWrapper::checkArg<u32>(L, 3);
+
+		Shader* shader = [&] {
+			for (const ShaderRef& s : pipeline->m_shaders) {
+				if(s.id == shader_id) {
+					return s.res;
+				}
+			}
+			return (Shader*)nullptr;
+		}();
+		if (!shader) {
+			return luaL_error(L, "Unknown shader id %d in renderReflectionVolumes.", shader_id);
+		}
+		if (!shader->isReady()) return 0;
+
+		RenderReflectionVolumesJob* job = LUMIX_NEW(pipeline->m_renderer.getAllocator(), RenderReflectionVolumesJob)(pipeline->m_allocator);
+		
+		job->m_program = shader->getProgram(pipeline->m_simple_cube_decl, 0);
+		job->m_ib = pipeline->m_cube_ib;
+		job->m_vb = pipeline->m_cube_vb;
+		job->m_pipeline = pipeline;
+		job->m_camera_params = cp;
+		job->m_texture_offset = texture_offset;
+		pipeline->m_renderer.queue(job, pipeline->m_profiler_link);
+		return 0;
+	}
+
+	static int fillClusters(lua_State* L) {
+		const int pipeline_idx = lua_upvalueindex(1);
+		if (lua_type(L, pipeline_idx) != LUA_TLIGHTUSERDATA) {
+			LuaWrapper::argError<PipelineImpl*>(L, pipeline_idx);
+		}
+		PipelineImpl* pipeline = LuaWrapper::toType<PipelineImpl*>(L, pipeline_idx);
+		
+		CameraParams cp;
+		if (lua_gettop(L) > 0) {
+			LuaWrapper::checkTableArg(L, 1);
+			cp = checkCameraParams(L, 1);
+		}
+
+		FillClustersJob* job = LUMIX_NEW(pipeline->m_renderer.getAllocator(), FillClustersJob)(pipeline->m_allocator);
+		
+		job->m_pipeline = pipeline;
+		if (lua_gettop(L) > 0) {
+			job->m_camera_params = cp;
+		}
+		else {
+			job->m_is_clear = true;
+		}
+		pipeline->m_renderer.queue(job, pipeline->m_profiler_link);
+		return 0;
+	}
 
 	static int renderBucket(lua_State* L)
 	{
@@ -3503,7 +3704,7 @@ struct PipelineImpl final : Pipeline
 				const u32 flags = u32(gpu::TextureFlags::NO_MIPS) | u32(gpu::TextureFlags::READBACK);
 				gpu::createTexture(staging, w, h, 1, gpu::TextureFormat::RGBA8, flags, nullptr, "staging_buffer");
 				gpu::copy(staging, handle);
-				gpu::readTexture(staging, Span((u8*)pixels.begin(), pixels.byte_size()));
+				gpu::readTexture(staging, 0, Span((u8*)pixels.begin(), pixels.byte_size()));
 				gpu::destroy(staging);
 
 				OS::OutputFile file;
@@ -3589,10 +3790,10 @@ struct PipelineImpl final : Pipeline
 		registerCFunction("getShadowCameraParams", PipelineImpl::getShadowCameraParams);
 		registerCFunction("pass", PipelineImpl::pass);
 		registerCFunction("prepareCommands", PipelineImpl::prepareCommands);
-		registerCFunction("renderEnvProbeVolumes", PipelineImpl::renderEnvProbeVolumes);
-		registerCFunction("renderLightProbeGrids", PipelineImpl::renderLightProbeGrids);
+		registerCFunction("fillClusters", PipelineImpl::fillClusters);
 		registerCFunction("renderBucket", PipelineImpl::renderBucket);
 		registerCFunction("renderParticles", PipelineImpl::renderParticles);
+		registerCFunction("renderReflectionVolumes", PipelineImpl::renderReflectionVolumes);
 		registerCFunction("renderTerrains", PipelineImpl::renderTerrains);
 		registerCFunction("setRenderTargets", PipelineImpl::setRenderTargets);
 		registerCFunction("setRenderTargetsReadonlyDS", PipelineImpl::setRenderTargetsReadonlyDS);
@@ -3650,6 +3851,7 @@ struct PipelineImpl final : Pipeline
 		int id;
 	};
 
+
 	IAllocator& m_allocator;
 	Renderer& m_renderer;
 	i64 m_profiler_link;
@@ -3676,15 +3878,25 @@ struct PipelineImpl final : Pipeline
 	gpu::BufferHandle m_pass_state_buffer;
 	gpu::VertexDecl m_base_vertex_decl;
 	gpu::VertexDecl m_2D_decl;
+	gpu::VertexDecl m_simple_cube_decl;
 	gpu::VertexDecl m_decal_decl;
 	gpu::VertexDecl m_3D_pos_decl;
 	gpu::VertexDecl m_text_mesh_decl;
 	gpu::VertexDecl m_point_light_decl;
-	CameraParams m_shadow_camera_params[4];
-
 	gpu::BufferHandle m_cube_vb;
 	gpu::BufferHandle m_cube_ib;
 	gpu::BufferHandle m_drawcall_ub = gpu::INVALID_BUFFER;
+	struct {
+		struct Buffer {
+			gpu::BufferHandle buffer = gpu::INVALID_BUFFER;
+			u32 capacity = 0;
+		};
+		Buffer lights;
+		Buffer clusters;
+		Buffer maps;
+		Buffer probes;
+	} m_cluster_buffers;
+	CameraParams m_shadow_camera_params[4];
 };
 
 

@@ -36,15 +36,13 @@ typedef unsigned short u16;
 typedef int i32;
 typedef unsigned int u32;
 typedef unsigned int u32;
-
 #ifdef _WIN32
-	typedef long long i64;
-	typedef unsigned long long u64;
-#else
-	typedef long i64;
+	typedef long long i64;	
+	typedef unsigned long long u64;	
+#else	
+	typedef long i64;	
 	typedef unsigned long u64;
 #endif
-
 typedef u64 uintptr;
 
 static_assert(sizeof(uintptr) == sizeof(void*), "Incorrect size of uintptr");
@@ -133,6 +131,7 @@ struct Span
 
 #pragma pack(1)
 struct Color {
+	Color() {}
 	Color(u32 abgr) { 
 		r = u8(abgr & 0xff);
 		g = u8((abgr >> 8) & 0xff);

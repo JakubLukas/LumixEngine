@@ -373,12 +373,13 @@ static void registerProperties(IAllocator& allocator)
 		),
 		component("environment_probe",
 			property("Enabled", &RenderScene::isEnvironmentProbeEnabled, &RenderScene::enableEnvironmentProbe),
-			property("Enabled reflection", &RenderScene::isEnvironmentProbeReflectionEnabled, &RenderScene::enableEnvironmentProbeReflection),
-			property("Enabled specular", &RenderScene::isEnvironmentProbeSpecular, &RenderScene::enableEnvironmentProbeSpecular),
-			property("Enabled diffuse", &RenderScene::isEnvironmentProbeDiffuse, &RenderScene::enableEnvironmentProbeDiffuse),
-			property("Override global size", &RenderScene::isEnvironmentProbeCustomSize, &RenderScene::enableEnvironmentProbeCustomSize),
-			var_property("Half extents", &RenderScene::getEnvironmentProbe, &EnvironmentProbe::half_extents),
-			var_property("Radiance size", &RenderScene::getEnvironmentProbe, &EnvironmentProbe::radiance_size)
+			var_property("Inner range", &RenderScene::getEnvironmentProbe, &EnvironmentProbe::inner_range),
+			var_property("Outer range", &RenderScene::getEnvironmentProbe, &EnvironmentProbe::outer_range)
+		),
+		component("reflection_probe",
+			property("Enabled", &RenderScene::isReflectionProbeEnabled, &RenderScene::enableReflectionProbe),
+			var_property("size", &RenderScene::getReflectionProbe, &ReflectionProbe::size),
+			var_property("half_extents", &RenderScene::getReflectionProbe, &ReflectionProbe::half_extents)
 		),
 		component("particle_emitter",
 			property("Resource", LUMIX_PROP(RenderScene, ParticleEmitterPath),
@@ -395,10 +396,6 @@ static void registerProperties(IAllocator& allocator)
 			property("Enabled", &RenderScene::isModelInstanceEnabled, &RenderScene::enableModelInstance),
 			property("Source", LUMIX_PROP(RenderScene, ModelInstancePath),
 				ResourceAttribute("Mesh (*.msh)", Model::TYPE))
-		),
-		component("light_probe_grid",
-			var_property("Resolution", &RenderScene::getLightProbeGrid, &LightProbeGrid::resolution),
-			var_property("Half extents", &RenderScene::getLightProbeGrid, &LightProbeGrid::half_extents)
 		),
 		component("environment",
 			var_property("Color", &RenderScene::getEnvironment, &Environment::diffuse_color, ColorAttribute()),
@@ -657,7 +654,7 @@ struct RendererImpl final : Renderer
 				const u32 flags = u32(gpu::TextureFlags::NO_MIPS) | u32(gpu::TextureFlags::READBACK);
 				gpu::createTexture(staging, w, h, 1, out_format, flags, nullptr, "staging_buffer");
 				gpu::copy(staging, handle);
-				gpu::readTexture(staging, buf);
+				gpu::readTexture(staging, 0, buf);
 				gpu::destroy(staging);
 				gpu::popDebugGroup();
 			}
@@ -688,7 +685,7 @@ struct RendererImpl final : Renderer
 			void setup() override {}
 			void execute() override {
 				PROFILE_FUNCTION();
-				gpu::update(handle, 0, x, y, w, h, format, mem.data);
+				gpu::update(handle, 0, 0, x, y, w, h, format, mem.data);
 				if (mem.own) {
 					renderer->free(mem);
 				}

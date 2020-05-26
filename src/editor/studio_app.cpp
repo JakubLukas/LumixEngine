@@ -950,10 +950,6 @@ struct StudioAppImpl final : StudioApp
 		Span<EntityRef> entities(&env, 1);
 		m_editor->addComponent(entities, env_cmp_type);
 		m_editor->addComponent(entities, lua_script_cmp_type);
-		const float intensity = 3;
-		m_editor->setProperty(env_cmp_type, "", -1, "Intensity", Span(&env, 1), intensity);
-		const float indirect_intensity = 0.3f;
-		m_editor->setProperty(env_cmp_type, "", -1, "Indirect intensity", Span(&env, 1), indirect_intensity);
 		Quat rot;
 		rot.fromEuler(Vec3(degreesToRadians(45.f), 0, 0));
 		m_editor->setEntitiesRotations(&env, &rot, 1);
@@ -1125,6 +1121,7 @@ struct StudioAppImpl final : StudioApp
 				setTitle(name);
 				m_editor->saveUniverse(name, true);
 				scanUniverses();
+				ImGui::CloseCurrentPopup();
 			}
 			ImGui::SameLine();
 			if (ImGui::Button(ICON_FA_TIMES "Cancel")) ImGui::CloseCurrentPopup();
@@ -1185,6 +1182,12 @@ struct StudioAppImpl final : StudioApp
 	Gizmo::Config& getGizmoConfig() { return m_gizmo_config; }
 	
 	void setCursorCaptured(bool captured) override { m_cursor_captured = captured; }
+
+	void toggleProjection() { 
+		Viewport vp = m_editor->getView().getViewport(); 
+		vp.is_ortho = !vp.is_ortho;
+		m_editor->getView().setViewport(vp); 
+	}
 
 	void undo() { m_editor->undo(); }
 	void redo() { m_editor->redo(); }
@@ -1469,6 +1472,7 @@ struct StudioAppImpl final : StudioApp
 		doMenuItem(*getAction("setGlobalCoordSystem"), true);
 		if (ImGui::BeginMenu(ICON_FA_CAMERA "View", true))
 		{
+			doMenuItem(*getAction("toggleProjection"), true);
 			doMenuItem(*getAction("viewTop"), true);
 			doMenuItem(*getAction("viewFront"), true);
 			doMenuItem(*getAction("viewSide"), true);
@@ -2155,6 +2159,7 @@ struct StudioAppImpl final : StudioApp
 			.is_selected.bind<&Gizmo::Config::isRotateMode>(&getGizmoConfig());
 		addAction<&StudioAppImpl::setScaleGizmoMode>(ICON_FA_EXPAND_ALT "Scale", "Set scale mode", "setScaleGizmoMode", ICON_FA_EXPAND_ALT)
 			.is_selected.bind<&Gizmo::Config::isScaleMode>(&getGizmoConfig());
+		addAction<&StudioAppImpl::toggleProjection>(NO_ICON "Ortho/perspective", "Toggle ortho/perspective projection", "toggleProjection");
 		addAction<&StudioAppImpl::setTopView>(NO_ICON "Top", "Set top camera view", "viewTop");
 		addAction<&StudioAppImpl::setFrontView>(NO_ICON "Front", "Set front camera view", "viewFront");
 		addAction<&StudioAppImpl::setSideView>(NO_ICON "Side", "Set side camera view", "viewSide");

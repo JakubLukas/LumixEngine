@@ -1,3 +1,4 @@
+#include "dds.h"
 #include "gpu.h"
 #include "engine/array.h"
 #include "engine/crc32.h"
@@ -60,6 +61,7 @@ struct Texture
 	GLenum format;
 	u32 width;
 	u32 height;
+	u32 flags;
 };
 
 
@@ -143,206 +145,6 @@ static struct {
 namespace DDS
 {
 
-static const u32 DDS_MAGIC = 0x20534444; //  little-endian
-static const u32 DDSD_CAPS = 0x00000001;
-static const u32 DDSD_HEIGHT = 0x00000002;
-static const u32 DDSD_WIDTH = 0x00000004;
-static const u32 DDSD_PITCH = 0x00000008;
-static const u32 DDSD_PIXELFORMAT = 0x00001000;
-static const u32 DDSD_MIPMAPCOUNT = 0x00020000;
-static const u32 DDSD_LINEARSIZE = 0x00080000;
-static const u32 DDSD_DEPTH = 0x00800000;
-static const u32 DDPF_ALPHAPIXELS = 0x00000001;
-static const u32 DDPF_FOURCC = 0x00000004;
-static const u32 DDPF_INDEXED = 0x00000020;
-static const u32 DDPF_RGB = 0x00000040;
-static const u32 DDSCAPS_COMPLEX = 0x00000008;
-static const u32 DDSCAPS_TEXTURE = 0x00001000;
-static const u32 DDSCAPS_MIPMAP = 0x00400000;
-static const u32 DDSCAPS2_CUBEMAP = 0x00000200;
-static const u32 DDSCAPS2_CUBEMAP_POSITIVEX = 0x00000400;
-static const u32 DDSCAPS2_CUBEMAP_NEGATIVEX = 0x00000800;
-static const u32 DDSCAPS2_CUBEMAP_POSITIVEY = 0x00001000;
-static const u32 DDSCAPS2_CUBEMAP_NEGATIVEY = 0x00002000;
-static const u32 DDSCAPS2_CUBEMAP_POSITIVEZ = 0x00004000;
-static const u32 DDSCAPS2_CUBEMAP_NEGATIVEZ = 0x00008000;
-static const u32 DDSCAPS2_VOLUME = 0x00200000;
-static const u32 D3DFMT_ATI1 = '1ITA';
-static const u32 D3DFMT_ATI2 = '2ITA';
-static const u32 D3DFMT_DXT1 = '1TXD';
-static const u32 D3DFMT_DXT2 = '2TXD';
-static const u32 D3DFMT_DXT3 = '3TXD';
-static const u32 D3DFMT_DXT4 = '4TXD';
-static const u32 D3DFMT_DXT5 = '5TXD';
-static const u32 D3DFMT_DX10 = '01XD';
-
-enum class DxgiFormat : u32 {
-  UNKNOWN                     ,
-  R32G32B32A32_TYPELESS       ,
-  R32G32B32A32_FLOAT          ,
-  R32G32B32A32_UINT           ,
-  R32G32B32A32_SINT           ,
-  R32G32B32_TYPELESS          ,
-  R32G32B32_FLOAT             ,
-  R32G32B32_UINT              ,
-  R32G32B32_SINT              ,
-  R16G16B16A16_TYPELESS       ,
-  R16G16B16A16_FLOAT          ,
-  R16G16B16A16_UNORM          ,
-  R16G16B16A16_UINT           ,
-  R16G16B16A16_SNORM          ,
-  R16G16B16A16_SINT           ,
-  R32G32_TYPELESS             ,
-  R32G32_FLOAT                ,
-  R32G32_UINT                 ,
-  R32G32_SINT                 ,
-  R32G8X24_TYPELESS           ,
-  D32_FLOAT_S8X24_UINT        ,
-  R32_FLOAT_X8X24_TYPELESS    ,
-  X32_TYPELESS_G8X24_UINT     ,
-  R10G10B10A2_TYPELESS        ,
-  R10G10B10A2_UNORM           ,
-  R10G10B10A2_UINT            ,
-  R11G11B10_FLOAT             ,
-  R8G8B8A8_TYPELESS           ,
-  R8G8B8A8_UNORM              ,
-  R8G8B8A8_UNORM_SRGB         ,
-  R8G8B8A8_UINT               ,
-  R8G8B8A8_SNORM              ,
-  R8G8B8A8_SINT               ,
-  R16G16_TYPELESS             ,
-  R16G16_FLOAT                ,
-  R16G16_UNORM                ,
-  R16G16_UINT                 ,
-  R16G16_SNORM                ,
-  R16G16_SINT                 ,
-  R32_TYPELESS                ,
-  D32_FLOAT                   ,
-  R32_FLOAT                   ,
-  R32_UINT                    ,
-  R32_SINT                    ,
-  R24G8_TYPELESS              ,
-  D24_UNORM_S8_UINT           ,
-  R24_UNORM_X8_TYPELESS       ,
-  X24_TYPELESS_G8_UINT        ,
-  R8G8_TYPELESS               ,
-  R8G8_UNORM                  ,
-  R8G8_UINT                   ,
-  R8G8_SNORM                  ,
-  R8G8_SINT                   ,
-  R16_TYPELESS                ,
-  R16_FLOAT                   ,
-  D16_UNORM                   ,
-  R16_UNORM                   ,
-  R16_UINT                    ,
-  R16_SNORM                   ,
-  R16_SINT                    ,
-  R8_TYPELESS                 ,
-  R8_UNORM                    ,
-  R8_UINT                     ,
-  R8_SNORM                    ,
-  R8_SINT                     ,
-  A8_UNORM                    ,
-  R1_UNORM                    ,
-  R9G9B9E5_SHAREDEXP          ,
-  R8G8_B8G8_UNORM             ,
-  G8R8_G8B8_UNORM             ,
-  BC1_TYPELESS                ,
-  BC1_UNORM                   ,
-  BC1_UNORM_SRGB              ,
-  BC2_TYPELESS                ,
-  BC2_UNORM                   ,
-  BC2_UNORM_SRGB              ,
-  BC3_TYPELESS                ,
-  BC3_UNORM                   ,
-  BC3_UNORM_SRGB              ,
-  BC4_TYPELESS                ,
-  BC4_UNORM                   ,
-  BC4_SNORM                   ,
-  BC5_TYPELESS                ,
-  BC5_UNORM                   ,
-  BC5_SNORM                   ,
-  B5G6R5_UNORM                ,
-  B5G5R5A1_UNORM              ,
-  B8G8R8A8_UNORM              ,
-  B8G8R8X8_UNORM              ,
-  R10G10B10_XR_BIAS_A2_UNORM  ,
-  B8G8R8A8_TYPELESS           ,
-  B8G8R8A8_UNORM_SRGB         ,
-  B8G8R8X8_TYPELESS           ,
-  B8G8R8X8_UNORM_SRGB         ,
-  BC6H_TYPELESS               ,
-  BC6H_UF16                   ,
-  BC6H_SF16                   ,
-  BC7_TYPELESS                ,
-  BC7_UNORM                   ,
-  BC7_UNORM_SRGB              ,
-  AYUV                        ,
-  Y410                        ,
-  Y416                        ,
-  NV12                        ,
-  P010                        ,
-  P016                        ,
-  OPAQUE_420                  ,
-  YUY2                        ,
-  Y210                        ,
-  Y216                        ,
-  NV11                        ,
-  AI44                        ,
-  IA44                        ,
-  P8                          ,
-  A8P8                        ,
-  B4G4R4A4_UNORM              ,
-  P208                        ,
-  V208                        ,
-  V408                        ,
-  FORCE_UINT
-} ;
-
-struct PixelFormat {
-	u32 dwSize;
-	u32 dwFlags;
-	u32 dwFourCC;
-	u32 dwRGBBitCount;
-	u32 dwRBitMask;
-	u32 dwGBitMask;
-	u32 dwBBitMask;
-	u32 dwAlphaBitMask;
-};
-
-struct Caps2 {
-	u32 dwCaps1;
-	u32 dwCaps2;
-	u32 dwDDSX;
-	u32 dwReserved;
-};
-
-struct Header {
-	u32 dwMagic;
-	u32 dwSize;
-	u32 dwFlags;
-	u32 dwHeight;
-	u32 dwWidth;
-	u32 dwPitchOrLinearSize;
-	u32 dwDepth;
-	u32 dwMipMapCount;
-	u32 dwReserved1[11];
-
-	PixelFormat pixelFormat;
-	Caps2 caps2;
-
-	u32 dwReserved2;
-};
-
-struct DXT10Header
-{
-	DxgiFormat dxgi_format;
-	u32 resource_dimension;
-	u32 misc_flag;
-	u32 array_size;
-	u32 misc_flags2;
-};
-
 struct LoadInfo {
 	bool compressed;
 	bool swap;
@@ -358,83 +160,6 @@ static u32 sizeDXTC(u32 w, u32 h, GLuint format) {
     const bool is_dxt1 = format == GL_COMPRESSED_RGBA_S3TC_DXT1_EXT || format == GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT;
 	const bool is_ati = format == GL_COMPRESSED_RED_RGTC1;
 	return ((w + 3) / 4) * ((h + 3) / 4) * (is_dxt1 || is_ati ? 8 : 16);
-}
-
-static bool isDXT1(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_FOURCC) && (pf.dwFourCC == D3DFMT_DXT1));
-}
-
-static bool isDXT10(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_FOURCC) && (pf.dwFourCC == D3DFMT_DX10));
-}
-
-static bool isATI1(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_FOURCC) && (pf.dwFourCC == D3DFMT_ATI1));
-}
-
-static bool isATI2(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_FOURCC) && (pf.dwFourCC == D3DFMT_ATI2));
-}
-
-static bool isDXT3(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_FOURCC) && (pf.dwFourCC == D3DFMT_DXT3));
-}
-
-static bool isDXT5(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_FOURCC) && (pf.dwFourCC == D3DFMT_DXT5));
-}
-
-static bool isBGRA8(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_RGB)
-		&& (pf.dwFlags & DDPF_ALPHAPIXELS)
-		&& (pf.dwRGBBitCount == 32)
-		&& (pf.dwRBitMask == 0xff0000)
-		&& (pf.dwGBitMask == 0xff00)
-		&& (pf.dwBBitMask == 0xff)
-		&& (pf.dwAlphaBitMask == 0xff000000U));
-}
-
-static bool isBGR8(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_RGB)
-		&& !(pf.dwFlags & DDPF_ALPHAPIXELS)
-		&& (pf.dwRGBBitCount == 24)
-		&& (pf.dwRBitMask == 0xff0000)
-		&& (pf.dwGBitMask == 0xff00)
-		&& (pf.dwBBitMask == 0xff));
-}
-
-static bool isBGR5A1(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_RGB)
-		&& (pf.dwFlags & DDPF_ALPHAPIXELS)
-		&& (pf.dwRGBBitCount == 16)
-		&& (pf.dwRBitMask == 0x00007c00)
-		&& (pf.dwGBitMask == 0x000003e0)
-		&& (pf.dwBBitMask == 0x0000001f)
-		&& (pf.dwAlphaBitMask == 0x00008000));
-}
-
-static bool isBGR565(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_RGB)
-		&& !(pf.dwFlags & DDPF_ALPHAPIXELS)
-		&& (pf.dwRGBBitCount == 16)
-		&& (pf.dwRBitMask == 0x0000f800)
-		&& (pf.dwGBitMask == 0x000007e0)
-		&& (pf.dwBBitMask == 0x0000001f));
-}
-
-static bool isINDEX8(const PixelFormat& pf)
-{
-	return ((pf.dwFlags & DDPF_INDEXED) && (pf.dwRGBBitCount == 8));
 }
 
 static LoadInfo loadInfoDXT1 = {
@@ -883,6 +608,17 @@ void bindTextures(const TextureHandle* handles, u32 offset, u32 count)
 	CHECK_GL(glBindTextures(offset, count, gl_handles));
 }
 
+void bindShaderBuffer(BufferHandle handle, u32 binding_idx)
+{
+	checkThread();
+	if(handle.isValid()) {
+		const Buffer& buffer = g_gpu.buffers[handle.value];
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, binding_idx, buffer.handle);
+	}
+	else {
+		glBindBufferRange(GL_SHADER_STORAGE_BUFFER, binding_idx, 0, 0, 0);
+	}
+}
 
 void bindVertexBuffer(u32 binding_idx, BufferHandle buffer, u32 buffer_offset, u32 stride_offset) {
 	checkThread();
@@ -1127,6 +863,7 @@ void unmap(BufferHandle buffer)
 	CHECK_GL(glUnmapNamedBuffer(buf));
 }
 
+
 void update(BufferHandle buffer, const void* data, size_t size)
 {
 	checkThread();
@@ -1369,7 +1106,8 @@ static struct {
 	{TextureFormat::R16F, GL_R16F, GL_RED, GL_HALF_FLOAT},
 	{TextureFormat::R8, GL_R8, GL_RED, GL_UNSIGNED_BYTE},
 	{TextureFormat::R16, GL_R16, GL_RED, GL_UNSIGNED_SHORT},
-	{TextureFormat::R32F, GL_R32F, GL_RED, GL_FLOAT}
+	{TextureFormat::R32F, GL_R32F, GL_RED, GL_FLOAT},
+	{TextureFormat::RG32F, GL_RG32F, GL_RG, GL_FLOAT}
 };
 
 
@@ -1396,7 +1134,7 @@ TextureInfo getTextureInfo(const void* data)
 }
 
 
-void update(TextureHandle texture, u32 level, u32 x, u32 y, u32 w, u32 h, TextureFormat format, void* buf)
+void update(TextureHandle texture, u32 level, u32 slice, u32 x, u32 y, u32 w, u32 h, TextureFormat format, void* buf)
 {
 	checkThread();
 	Texture& t = g_gpu.textures[texture.value];
@@ -1405,7 +1143,13 @@ void update(TextureHandle texture, u32 level, u32 x, u32 y, u32 w, u32 h, Textur
 		if (s_texture_formats[i].format == format) {
 			const auto& f = s_texture_formats[i];
 			CHECK_GL(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
-			CHECK_GL(glTextureSubImage2D(handle, level, x, y, w, h, f.gl_format, f.type, buf));
+			if (t.flags & (u32)TextureFlags::IS_CUBE) {
+				CHECK_GL(glTextureSubImage3D(handle, level, x, y, slice, w, h, 1, f.gl_format, f.type, buf));
+			}
+			else {
+				ASSERT(slice == 0);
+				CHECK_GL(glTextureSubImage2D(handle, level, x, y, w, h, f.gl_format, f.type, buf));
+			}
 			break;
 		}
 	}
@@ -1596,6 +1340,7 @@ bool loadTexture(TextureHandle handle, const void* input, int input_size, u32 fl
 	t.target = is_cubemap ? GL_TEXTURE_CUBE_MAP : layers > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
 	t.width = hdr.dwWidth;
 	t.height = hdr.dwHeight;
+	t.flags = flags;
 	return true;
 }
 
@@ -1692,13 +1437,18 @@ bool createTexture(TextureHandle handle, u32 w, u32 h, u32 depth, TextureFormat 
 	const bool is_srgb = flags & (u32)TextureFlags::SRGB;
 	const bool no_mips = flags & (u32)TextureFlags::NO_MIPS;
 	const bool is_3d = depth > 1 && (flags & (u32)TextureFlags::IS_3D);
+	const bool is_cubemap = flags & (u32)TextureFlags::IS_CUBE;
+
+	ASSERT((!is_3d && !is_cubemap) || depth == 1);
+	ASSERT(!is_cubemap || !is_3d);
+	ASSERT(!is_cubemap || no_mips || !data);
 	ASSERT(!is_srgb); // use format argument to enable srgb
 	ASSERT(debug_name && debug_name[0]);
 
 	GLuint texture;
 	int found_format = 0;
 	GLenum internal_format = 0;
-	const GLenum target = depth <= 1 ? GL_TEXTURE_2D : (is_3d ? GL_TEXTURE_3D : GL_TEXTURE_2D_ARRAY);
+	const GLenum target = is_3d ? GL_TEXTURE_3D : (is_cubemap ? GL_TEXTURE_CUBE_MAP : (depth > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D));
 	const u32 mip_count = no_mips ? 1 : 1 + log2(maximum(w, h, depth));
 
 	CHECK_GL(glCreateTextures(target, 1, &texture));
@@ -1708,15 +1458,33 @@ bool createTexture(TextureHandle handle, u32 w, u32 h, u32 depth, TextureFormat 
 			if(depth <= 1) {
 				CHECK_GL(glTextureStorage2D(texture, mip_count, s_texture_formats[i].gl_internal, w, h));
 				if (data) {
-					CHECK_GL(glTextureSubImage2D(texture
-						, 0
-						, 0
-						, 0
-						, w
-						, h
-						, s_texture_formats[i].gl_format
-						, s_texture_formats[i].type
-						, data));
+					if (is_cubemap) {
+						for (u32 face = 0; face < 6; ++face) {
+							ASSERT(format == TextureFormat::RGBA32F);
+							CHECK_GL(glTextureSubImage3D(texture
+								, 0
+								, 0
+								, 0
+								, face
+								, w
+								, h
+								, 1
+								, s_texture_formats[i].gl_format
+								, s_texture_formats[i].type
+								, ((u8*)data) + face * w * h * sizeof(float) * 4));
+						}
+					}
+					else {
+						CHECK_GL(glTextureSubImage2D(texture
+							, 0
+							, 0
+							, 0
+							, w
+							, h
+							, s_texture_formats[i].gl_format
+							, s_texture_formats[i].type
+							, data));
+					}
 				}
 			}
 			else {
@@ -1774,10 +1542,16 @@ bool createTexture(TextureHandle handle, u32 w, u32 h, u32 depth, TextureFormat 
 	t.format = internal_format;
 	t.width = w;
 	t.height = h;
+	t.flags = flags;
 
 	return true;
 }
 
+void generateMipmaps(TextureHandle handle)
+{
+	Texture& t = g_gpu.textures[handle.value];
+	CHECK_GL(glGenerateTextureMipmap(t.handle));
+}
 
 void destroy(TextureHandle texture)
 {
@@ -1886,29 +1660,48 @@ bool createProgram(ProgramHandle prog, const VertexDecl& decl, const char** srcs
 
 	for (u32 i = 0; i < num; ++i) {
 		GLenum shader_type;
-		switch (types[i]) {
-			case ShaderType::GEOMETRY: shader_type = GL_GEOMETRY_SHADER; break;
-			case ShaderType::FRAGMENT: shader_type = GL_FRAGMENT_SHADER; break;
-			case ShaderType::VERTEX: shader_type = GL_VERTEX_SHADER; break;
-			default: ASSERT(false); return false;
-		}
-		const GLuint shd = glCreateShader(shader_type);
+		u32 src_idx = 0;
 		combined_srcs[0] = R"#(
 			#version 140
+			#extension GL_ARB_shader_storage_buffer_object : enable
 			#extension GL_ARB_explicit_attrib_location : enable
 			#extension GL_ARB_shading_language_420pack : enable
 			#extension GL_ARB_separate_shader_objects : enable
 			#define _ORIGIN_BOTTOM_LEFT
 		)#";
-		combined_srcs[prefixes_count + decl.attributes_count + 1] = srcs[i];
+		++src_idx;
+		switch (types[i]) {
+			case ShaderType::GEOMETRY: {
+				combined_srcs[src_idx] = "#define LUMIX_GEOMETRY_SHADER\n"; 
+				shader_type = GL_GEOMETRY_SHADER;
+				break;
+			}
+			case ShaderType::FRAGMENT: {
+				combined_srcs[src_idx] = "#define LUMIX_FRAGMENT_SHADER\n"; 
+				shader_type = GL_FRAGMENT_SHADER;
+				break;
+			}
+			case ShaderType::VERTEX: {
+				combined_srcs[src_idx] = "#define LUMIX_VERTEX_SHADER\n"; 
+				shader_type = GL_VERTEX_SHADER;
+				break;
+			}
+			default: ASSERT(false); return false;
+		}
+		++src_idx;
+		const GLuint shd = glCreateShader(shader_type);
 		for (u32 j = 0; j < prefixes_count; ++j) {
-			combined_srcs[j + 1] = prefixes[j];
+			combined_srcs[src_idx] = prefixes[j];
+			++src_idx;
 		}
 		for (u32 j = 0; j < decl.attributes_count; ++j) {
-			combined_srcs[j + prefixes_count + 1] = attr_defines[decl.attributes[j].idx];
+			combined_srcs[src_idx] = attr_defines[decl.attributes[j].idx];
+			++src_idx;
 		}
+		combined_srcs[src_idx] = srcs[i];
+		++src_idx;
 
-		CHECK_GL(glShaderSource(shd, 2 + prefixes_count + decl.attributes_count, combined_srcs, 0));
+		CHECK_GL(glShaderSource(shd, src_idx, combined_srcs, 0));
 		CHECK_GL(glCompileShader(shd));
 
 		GLint compile_status;
@@ -2069,15 +1862,29 @@ void copy(TextureHandle dst_handle, TextureHandle src_handle) {
 	checkThread();
 	Texture& dst = g_gpu.textures[dst_handle.value];
 	Texture& src = g_gpu.textures[src_handle.value];
-	ASSERT(src.target == GL_TEXTURE_2D);
+	ASSERT(src.target == GL_TEXTURE_2D || src.target == GL_TEXTURE_CUBE_MAP);
 	ASSERT(src.target == dst.target);
 	ASSERT(dst.width == src.width);
 	ASSERT(dst.height == src.height);
 
-	CHECK_GL(glCopyImageSubData(src.handle, src.target, 0, 0, 0, 0, dst.handle, dst.target, 0, 0, 0, 0, src.width, src.height, 1));
+	u32 mip = 0;
+	while ((src.width >> mip) != 0 || (src.height >> mip) != 0) {
+		const u32 w = maximum(src.width >> mip, 1);
+		const u32 h = maximum(src.height >> mip, 1);
+
+		if (src.target == GL_TEXTURE_CUBE_MAP) {
+			CHECK_GL(glCopyImageSubData(src.handle, src.target, mip, 0, 0, 0, dst.handle, dst.target, mip, 0, 0, 0, w, h, 6));
+		}
+		else {
+			CHECK_GL(glCopyImageSubData(src.handle, src.target, mip, 0, 0, 0, dst.handle, dst.target, mip, 0, 0, 0, w, h, 1));
+		}
+		++mip;
+		if (src.flags & (u32)TextureFlags::NO_MIPS) break;
+		if (dst.flags & (u32)TextureFlags::NO_MIPS) break;
+	}
 }
 
-void readTexture(TextureHandle texture, Span<u8> buf)
+void readTexture(TextureHandle texture, u32 mip, Span<u8> buf)
 {
 	checkThread();
 
@@ -2087,7 +1894,7 @@ void readTexture(TextureHandle texture, Span<u8> buf)
 	for (int i = 0; i < sizeof(s_texture_formats) / sizeof(s_texture_formats[0]); ++i) {
 		if (s_texture_formats[i].gl_internal == t.format) {
 			const auto& f = s_texture_formats[i];
-			CHECK_GL(glGetTextureImage(handle, 0, f.gl_format, f.type, buf.length(), buf.begin()));
+			CHECK_GL(glGetTextureImage(handle, mip, f.gl_format, f.type, buf.length(), buf.begin()));
 			return;
 		}
 	}
@@ -2145,6 +1952,30 @@ void queryTimestamp(QueryHandle query)
 	glQueryCounter(query.value, GL_TIMESTAMP);
 }
 
+void setFramebufferCube(TextureHandle cube, u32 face, u32 mip)
+{
+	const GLuint t = g_gpu.textures[cube.value].handle;
+	checkThread();
+	CHECK_GL(glDisable(GL_FRAMEBUFFER_SRGB));
+	CHECK_GL(glBindFramebuffer(GL_FRAMEBUFFER, g_gpu.framebuffer));
+	CHECK_GL(glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, t, mip));
+
+	GLint max_attachments = 0;
+	glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &max_attachments);
+	for(int i = 1; i < max_attachments; ++i) {
+		glNamedFramebufferRenderbuffer(g_gpu.framebuffer, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, 0);
+	}
+	glNamedFramebufferRenderbuffer(g_gpu.framebuffer, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+	glNamedFramebufferRenderbuffer(g_gpu.framebuffer, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, 0);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, g_gpu.framebuffer);
+	auto status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+	ASSERT(status == GL_FRAMEBUFFER_COMPLETE);
+
+	GLenum db = GL_COLOR_ATTACHMENT0;
+	
+	CHECK_GL(glDrawBuffers(1, &db));
+}
 
 void setFramebuffer(TextureHandle* attachments, u32 num, u32 flags)
 {

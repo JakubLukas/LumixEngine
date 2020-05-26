@@ -59,14 +59,6 @@ struct TerrainInfo
 	int index;
 };
 
-struct LightProbeGrid {
-	EntityRef entity;
-	IVec3 resolution;
-	Vec3 half_extents;
-	u64 guid;
-	Texture* data[7] = {};
-};
-
 struct Environment
 {
 	enum Flags : u32{
@@ -97,25 +89,28 @@ struct PointLight
 	bool cast_shadows;
 };
 
+struct ReflectionProbe
+{
+	enum Flags {
+		ENABLED = 1 << 2,
+	};
+
+	Texture* texture = nullptr;
+	u64 guid;
+	FlagSet<Flags, u32> flags;
+	u32 size = 128;
+	Vec3 half_extents;
+};
 
 struct EnvironmentProbe
 {
-	enum Flags
-	{
-		REFLECTION = 1 << 0,
-		OVERRIDE_GLOBAL_SIZE = 1 << 1,
+	enum Flags {
 		ENABLED = 1 << 2,
-		DIFFUSE = 1 << 3,
-		SPECULAR = 1 << 4
 	};
 
-	Texture* reflection = nullptr;
-	Texture* radiance = nullptr;
-	Vec3 half_extents;
-	u64 guid;
+	Vec3 inner_range;
+	Vec3 outer_range;
 	FlagSet<Flags, u32> flags;
-	int radiance_size = 128;
-	int reflection_size = 1024;
 	Vec3 sh_coefs[9];
 };
 
@@ -232,9 +227,6 @@ struct LUMIX_RENDERER_API RenderScene : IScene
 	virtual Vec4 getShadowmapCascades(EntityRef entity) = 0;
 	virtual void setShadowmapCascades(EntityRef entity, const Vec4& value) = 0;
 
-	virtual LightProbeGrid& getLightProbeGrid(EntityRef entity) = 0;
-	virtual Span<LightProbeGrid> getLightProbeGrids() = 0;
-
 	virtual DebugTriangle* addDebugTriangles(int count) = 0;
 	virtual void addDebugTriangle(const DVec3& p0, const DVec3& p1, const DVec3& p2, u32 color) = 0;
 	virtual void addDebugLine(const DVec3& from, const DVec3& to, u32 color) = 0; 
@@ -328,19 +320,17 @@ struct LUMIX_RENDERER_API RenderScene : IScene
 	virtual float getLightRange(EntityRef entity) = 0;
 	virtual void setLightRange(EntityRef entity, float value) = 0;
 
-	virtual Span<EntityRef> getAllEnvironmentProbes() = 0;
+	virtual Span<EntityRef> getReflectionProbesEntities() = 0;
+	virtual ReflectionProbe& getReflectionProbe(EntityRef entity) = 0;
+	virtual void enableReflectionProbe(EntityRef entity, bool enable) = 0;
+	virtual bool isReflectionProbeEnabled(EntityRef entity) = 0;
+	virtual Span<const ReflectionProbe> getReflectionProbes() = 0;
+
+	virtual Span<EntityRef> getEnvironmentProbesEntities() = 0;
 	virtual EnvironmentProbe& getEnvironmentProbe(EntityRef entity) = 0;
 	virtual void enableEnvironmentProbe(EntityRef entity, bool enable) = 0;
 	virtual bool isEnvironmentProbeEnabled(EntityRef entity) = 0;
-	virtual void getEnvironmentProbes(Array<EnvProbeInfo>& probes) = 0;
-	virtual bool isEnvironmentProbeReflectionEnabled(EntityRef entity) = 0;
-	virtual void enableEnvironmentProbeReflection(EntityRef entity, bool enable) = 0;
-	virtual bool isEnvironmentProbeSpecular(EntityRef entity) = 0;
-	virtual void enableEnvironmentProbeSpecular(EntityRef entity, bool enable) = 0;
-	virtual bool isEnvironmentProbeDiffuse(EntityRef entity) = 0;
-	virtual void enableEnvironmentProbeDiffuse(EntityRef entity, bool enable) = 0;
-	virtual bool isEnvironmentProbeCustomSize(EntityRef entity) = 0;
-	virtual void enableEnvironmentProbeCustomSize(EntityRef entity, bool enable) = 0;
+	virtual Span<const EnvironmentProbe> getEnvironmentProbes() = 0;
 
 	virtual void setTextMeshText(EntityRef entity, const char* text) = 0;
 	virtual const char* getTextMeshText(EntityRef entity) = 0;
