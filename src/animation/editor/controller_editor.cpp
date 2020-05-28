@@ -353,6 +353,24 @@ struct ControllerEditorImpl : ControllerEditor {
 		ImGui::End();
 	}
 
+	void hierarchyGUI() {
+		ImVec2 canvas_from = ImGui::GetCursorScreenPos();
+		ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+		ImVec2 canvas_to = canvas_from + canvas_size;
+		ImDrawList* dl = ImGui::GetWindowDrawList();
+
+		ImGui::PushClipRect(canvas_from, canvas_to, false);
+
+		//dl->AddRectFilled(canvas_from, canvas_to, IM_COL32(255, 255, 255, 255));
+		GroupNode* root = m_controller->m_root;
+		for (int i = 0, c = root->m_children.size(); i < c; ++i) {
+			GroupNode::Child& node = root->m_children[i];
+			ImGui::Text("node %s", node.node->m_name.c_str());
+		}
+
+		ImGui::PopClipRect();
+	}
+
 	void onWindowGUI() override {
 		if (!m_open) return;
 
@@ -394,6 +412,10 @@ struct ControllerEditorImpl : ControllerEditor {
 					}
 					ImGui::EndMenu();
 				}
+				if (ImGui::BeginMenu("Options")) {
+					ImGui::MenuItem("GUI editor", NULL, &m_gui_editor);
+					ImGui::EndMenu();
+				}
 
 				if (m_current_node && m_current_node->type() == Node::Type::GROUP) {
 					if (ImGui::BeginMenu("Create node")) {
@@ -409,11 +431,16 @@ struct ControllerEditorImpl : ControllerEditor {
 				ImGui::EndMenuBar();
 			}
 
-			ImGui::Columns(2);
-			hierarchy_ui(*m_controller->m_root);
-			ImGui::NextColumn();
-			if (m_current_node) ui_dispatch(*m_current_node);
-			ImGui::Columns();
+			if (m_gui_editor) {
+				hierarchyGUI();
+			}
+			else {
+				ImGui::Columns(2);
+				hierarchy_ui(*m_controller->m_root);
+				ImGui::NextColumn();
+				if (m_current_node) ui_dispatch(*m_current_node);
+				ImGui::Columns();
+			}
 		}
 		ImGui::End();
 
@@ -667,6 +694,7 @@ struct ControllerEditorImpl : ControllerEditor {
 	Node* m_current_node = nullptr;
 	Model* m_model = nullptr;
 	bool m_open = false;
+	bool m_gui_editor = false;
 }; // ControllerEditorImpl
 
 ControllerEditor& ControllerEditor::create(StudioApp& app) {
