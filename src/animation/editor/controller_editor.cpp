@@ -64,6 +64,7 @@ struct ControllerEditorImpl : ControllerEditor {
 		}
 
 		node->m_name = "new";
+		node->m_pos_x = node->m_pos_y = 0;
 		parent.m_children.emplace(allocator);
 		parent.m_children.back().node = node;
 	}
@@ -362,18 +363,49 @@ struct ControllerEditorImpl : ControllerEditor {
 	}
 
 	void hierarchyGUI() {
+		auto draw_node = [](ImDrawList& dl, const ImVec2& center_pos, const Node& node) {
+			ImVec2 size(100, 80);
+			ImVec2 padding(5, 5);
+			float text_height = ImGui::GetFontSize();
+
+			ImVec2 pos(node.m_pos_x, node.m_pos_y);
+			ImVec2 begin = ImVec2(center_pos) + pos;
+
+			ImGui::SetCursorScreenPos(begin);
+			ImGui::InvisibleButton("##hover", size);
+			bool hover = ImGui::IsItemHovered();
+			if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+				ImVec2 drag_delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+				begin = begin + drag_delta;
+			}
+			if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+				nastav novu poziciu nodu podla drag delty
+			}
+
+			ImVec2 end = begin + size;
+
+			dl.AddRectFilled(begin, end, IM_COL32(200, 200, 200, 255), 5, ImDrawCornerFlags_All);
+			dl.AddRect(begin, end, IM_COL32(255, 255, 255, 255), 5, ImDrawCornerFlags_All);
+
+			ImVec2 name_line_begin = begin + ImVec2(0, padding.y * 2 + text_height);
+			dl.AddLine(name_line_begin, ImVec2(end.x, name_line_begin.y), IM_COL32(255, 255, 255, 255));
+
+			const char* type_str = toString(node.type());
+			StaticString<64> name(node.m_name.c_str(), " (", type_str, ")");
+			dl.AddText(begin + padding, (hover) ? IM_COL32(0, 0, 0, 255) : IM_COL32(100, 100, 100, 255), name);
+		};
+
 		ImVec2 canvas_from = ImGui::GetCursorScreenPos();
 		ImVec2 canvas_size = ImGui::GetContentRegionAvail();
 		ImVec2 canvas_to = canvas_from + canvas_size;
-		ImDrawList* dl = ImGui::GetWindowDrawList();
+		ImDrawList& dl = *ImGui::GetWindowDrawList();
 
 		ImGui::PushClipRect(canvas_from, canvas_to, false);
 
-		//dl->AddRectFilled(canvas_from, canvas_to, IM_COL32(255, 255, 255, 255));
 		GroupNode* root = m_controller->m_root;
 		for (int i = 0, c = root->m_children.size(); i < c; ++i) {
 			GroupNode::Child& node = root->m_children[i];
-			ImGui::Text("node %s", node.node->m_name.c_str());
+			draw_node(dl, canvas_from + ImVec2(canvas_size.x * 0.5f, canvas_size.y * 0.5f), *node.node);
 		}
 
 		ImGui::PopClipRect();

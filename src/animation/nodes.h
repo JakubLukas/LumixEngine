@@ -60,6 +60,8 @@ struct Node {
 
 	GroupNode* m_parent;
 	String m_name;
+	float m_pos_x;
+	float m_pos_y;
 };
 
 struct AnimationNode final : Node {
