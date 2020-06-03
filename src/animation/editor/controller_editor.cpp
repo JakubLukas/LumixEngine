@@ -20,6 +20,10 @@
 
 namespace Lumix::Anim {
 
+static bool is_in(const ImVec2& min, const ImVec2& max, const ImVec2& pos) {
+	return min.x <= pos.x && pos.x <= max.x && min.y <= pos.y && pos.y <= max.y;
+}
+
 struct ControllerEditorImpl : ControllerEditor {
 	ControllerEditorImpl(StudioApp& app)
 		: m_app(app)
@@ -363,36 +367,55 @@ struct ControllerEditorImpl : ControllerEditor {
 	}
 
 	void hierarchyGUI() {
-		auto draw_node = [](ImDrawList& dl, const ImVec2& center_pos, const Node& node) {
-			ImVec2 size(100, 80);
-			ImVec2 padding(5, 5);
+		struct Context
+		{
+			//in
+			bool m_mouse_clicked;
+			ImVec2 m_mouse_pos;
+			ImVec2 m_dragging;
+
+			//out
+			Node* m_selected = nullptr;
+		};
+		static Context ctx;
+
+		auto draw_node = [](Context& ctx, ImDrawList& dl, const ImVec2& center_pos, Node& node) {
+			const ImGuiStyle& style = ImGui::GetStyle();
+			ImColor title_color = ImColor(style.Colors[ImGuiCol_Tab]);
+			ImVec2 size(120, 80);
 			float text_height = ImGui::GetFontSize();
+			bool selected = &node == ctx.m_selected;
 
 			ImVec2 pos(node.m_pos_x, node.m_pos_y);
 			ImVec2 begin = ImVec2(center_pos) + pos;
-
-			ImGui::SetCursorScreenPos(begin);
-			ImGui::InvisibleButton("##hover", size);
-			bool hover = ImGui::IsItemHovered();
-			if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-				ImVec2 drag_delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-				begin = begin + drag_delta;
+			if (selected) {
+				begin = begin + ctx.m_dragging;
 			}
-			if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-				nastav novu poziciu nodu podla drag delty
-			}
-
 			ImVec2 end = begin + size;
 
-			dl.AddRectFilled(begin, end, IM_COL32(200, 200, 200, 255), 5, ImDrawCornerFlags_All);
-			dl.AddRect(begin, end, IM_COL32(255, 255, 255, 255), 5, ImDrawCornerFlags_All);
+			ImGui::PushID(&node);
 
-			ImVec2 name_line_begin = begin + ImVec2(0, padding.y * 2 + text_height);
-			dl.AddLine(name_line_begin, ImVec2(end.x, name_line_begin.y), IM_COL32(255, 255, 255, 255));
+			ImGui::SetCursorScreenPos(begin);
+			ImGui::InvisibleButton("hover", size);
+			if (is_in(begin, end, ctx.m_mouse_pos)) {
+				title_color = ImColor(style.Colors[ImGuiCol_TabHovered]);
+
+				if (ctx.m_mouse_clicked)
+					ctx.m_selected = &node;
+			}
+
+			dl.AddRectFilled(begin, end, ImColor(style.Colors[ImGuiCol_FrameBg]), style.FrameRounding, ImDrawCornerFlags_All);
+
+			ImVec2 title_end = ImVec2(end.x, begin.y + style.FramePadding.y * 2 + text_height);
+			if (selected)
+				title_color = ImColor(style.Colors[ImGuiCol_TabActive]);
+			dl.AddRectFilled(begin, title_end, title_color, style.FrameRounding, ImDrawCornerFlags_Top);
 
 			const char* type_str = toString(node.type());
 			StaticString<64> name(node.m_name.c_str(), " (", type_str, ")");
-			dl.AddText(begin + padding, (hover) ? IM_COL32(0, 0, 0, 255) : IM_COL32(100, 100, 100, 255), name);
+			dl.AddText(begin + style.FramePadding, ImColor(style.Colors[ImGuiCol_Text]), name);
+
+			ImGui::PopID();
 		};
 
 		ImVec2 canvas_from = ImGui::GetCursorScreenPos();
@@ -402,11 +425,32 @@ struct ControllerEditorImpl : ControllerEditor {
 
 		ImGui::PushClipRect(canvas_from, canvas_to, false);
 
+		ctx.m_mouse_pos = ImGui::GetMousePos();
+		ctx.m_mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+		ctx.m_dragging = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+
+		if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+			if (ctx.m_selected != nullptr) {
+				ctx.m_selected->m_pos_x += ctx.m_dragging.x;
+				ctx.m_selected->m_pos_y += ctx.m_dragging.y;
+				ctx.m_dragging.x = ctx.m_dragging.y = 0.0f;
+			}
+		}
+		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+			ImVec2 mouse_pos = ImGui::GetMousePos();
+			if (is_in(canvas_from, canvas_to, mouse_pos)) {
+				ctx.m_selected = nullptr;
+			}
+		}
+
 		GroupNode* root = m_controller->m_root;
 		for (int i = 0, c = root->m_children.size(); i < c; ++i) {
 			GroupNode::Child& node = root->m_children[i];
-			draw_node(dl, canvas_from + ImVec2(canvas_size.x * 0.5f, canvas_size.y * 0.5f), *node.node);
+			if (node.node != ctx.m_selected)
+				draw_node(ctx, dl, canvas_from + ImVec2(canvas_size.x * 0.5f, canvas_size.y * 0.5f), *node.node);
 		}
+		if (ctx.m_selected != nullptr)
+			draw_node(ctx, dl, canvas_from + ImVec2(canvas_size.x * 0.5f, canvas_size.y * 0.5f), *ctx.m_selected);
 
 		ImGui::PopClipRect();
 	}
