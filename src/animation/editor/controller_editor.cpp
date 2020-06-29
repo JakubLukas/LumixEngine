@@ -20,7 +20,7 @@
 
 namespace Lumix::Anim {
 
-static bool is_in(const ImVec2& min, const ImVec2& max, const ImVec2& pos) {
+static bool is_point_in_rect(const ImVec2& min, const ImVec2& max, const ImVec2& pos) {
 	return min.x <= pos.x && pos.x <= max.x && min.y <= pos.y && pos.y <= max.y;
 }
 
@@ -163,7 +163,28 @@ struct ControllerEditorImpl : ControllerEditor {
 
 		child_properties_ui(node);
 
-		switch(node.type()) {
+		ImGui::Separator();
+
+		if (node.m_parent && ImGui::CollapsingHeader("Transitions")) {
+			Array<GroupNode::Child>& children = node.m_parent->m_children;
+			int child_idx = children.find([&](const GroupNode::Child& c) { return c.node == &node; });
+			ASSERT(child_idx >= 0);
+			GroupNode::Child& child = children[child_idx];
+			for (GroupNode::Child::Transition& tr : child.transitions) {
+				const char* name_to = children[tr.to].node->m_name.c_str();
+				if (ImGui::TreeNodeEx(&tr, 0, "this -> %s", name_to)) {
+					nodeInput("To", child_idx, Ref(tr.to), children);
+					conditionInput("Condition", m_controller->m_inputs, Ref(tr.condition_str), Ref(tr.condition));
+					ImGui::TreePop();
+				}
+			}
+			if (ImGui::Button("Add##transition")) {
+				GroupNode::Child::Transition& transition = child.transitions.emplace(m_controller->m_allocator);
+				transition.to = 0;
+			}
+		}
+
+		switch (node.type()) {
 			case Node::ANIMATION: properties_ui((AnimationNode&)node); break;
 			case Node::GROUP: properties_ui((GroupNode&)node); break;
 			case Node::BLEND1D: properties_ui((Blend1DNode&)node); break;
@@ -228,18 +249,21 @@ struct ControllerEditorImpl : ControllerEditor {
 		return false;
 	}
 
-	static bool nodeInput(const char* label, Ref<u32> value, const Array<GroupNode::Child>& children) {
+	static bool nodeInput(const char* label, const u32 from, Ref<u32> value, const Array<GroupNode::Child>& children) {
 		if (!ImGui::BeginCombo(label, children[value].node->m_name.c_str())) return false;
-
+		bool result = false;
 		for (GroupNode::Child& child : children) {
+			u32 idx = u32(&child - children.begin());
+			if (idx == from) continue;
 			if (ImGui::Selectable(child.node->m_name.c_str())) {
 				value = u32(&child - children.begin());
-				return true;
+				result = true;
+				break;
 			}
 		}
 
 		ImGui::EndCombo();
-		return false;
+		return result;
 	}
 
 	static const char* toString(Node::Type type) {
@@ -369,8 +393,12 @@ struct ControllerEditorImpl : ControllerEditor {
 	void hierarchyGUI() {
 		struct Context
 		{
-			float scale;zacni robit na scale
+			float scale_speed = 0.1f;
+			float scale = 1.0f;
 			Node* m_selected = nullptr;
+			ImVec2 node_size_default = ImVec2(120, 80);
+			float grid_size_default = 100.0f;
+			ImVec2 canvas_pos = ImVec2(0, 0);
 		};
 		static Context ctx;
 
@@ -412,58 +440,105 @@ struct ControllerEditorImpl : ControllerEditor {
 
 		ImGui::PushClipRect(canvas_from, canvas_to, false);
 
-		ImVec2 mouse_pos = ImGui::GetMousePos();
+		ImVec2 scale_vec = ImVec2(ctx.scale, ctx.scale);
 		bool mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 		ImVec2 dragging = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+		ImVec2 wheel_dragging = ImGui::GetMouseDragDelta(ImGuiMouseButton_Middle);
 		Node* selected_old = ctx.m_selected;
 
 		if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
 			if (ctx.m_selected != nullptr) {
-				ctx.m_selected->m_pos_x += dragging.x;
-				ctx.m_selected->m_pos_y += dragging.y;
+				ctx.m_selected->m_pos_x += dragging.x / ctx.scale;
+				ctx.m_selected->m_pos_y += dragging.y / ctx.scale;
 				dragging = ImVec2(0, 0);
 			}
 		}
-		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-			ImVec2 mouse_pos = ImGui::GetMousePos();
-			if (is_in(canvas_from, canvas_to, mouse_pos)) {
+		if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+			ctx.canvas_pos = ctx.canvas_pos + wheel_dragging;
+			wheel_dragging = ImVec2(0, 0);
+		}
+		if (ImGui::IsMouseHoveringRect(canvas_from, canvas_to)) {
+			if (mouse_clicked)
 				ctx.m_selected = nullptr;
-			}
+
+			if (float mw = ImGui::GetIO().MouseWheel; mw != 0.0f)
+				ctx.scale = clamp(ctx.scale + ctx.scale_speed * mw, 0.1f, 100.0f);
 		}
 
-		ImVec2 center_pos = canvas_from + ImVec2(canvas_size.x * 0.5f, canvas_size.y * 0.5f);
-
-		ImVec2 size = ImVec2(120, 80);
-
+		ImVec2 center_pos = canvas_from + ImVec2(canvas_size.x * 0.5f, canvas_size.y * 0.5f) + ctx.canvas_pos + wheel_dragging;
+		ImVec2 node_size = ctx.node_size_default * scale_vec;
 		Node* hovered = nullptr;
-
 		GroupNode* root = m_controller->m_root;
 
+		//process input top to bottom
 		for (int i = 0, c = root->m_children.size(); i < c; ++i) {
-			GroupNode::Child& node = root->m_children[i];
-			ImVec2 begin = center_pos + ImVec2(node.node->m_pos_x, node.node->m_pos_y);
+			const GroupNode::Child& node = root->m_children[i];
+			ImVec2 begin = center_pos + ImVec2(node.node->m_pos_x, node.node->m_pos_y) * scale_vec;
 			if (ctx.m_selected == node.node)
 				begin = begin + dragging;
-			ImVec2 end = begin + size;
-			if (is_in(begin, end, mouse_pos)) {
+			ImVec2 end = begin + node_size;
+			if (ImGui::IsMouseHoveringRect(begin, end)) {
 				hovered = node.node;
 				if (mouse_clicked)
 					ctx.m_selected = node.node;
 				break;
 			}
 		}
+
+		//draw grid
+		float grid_size = ctx.grid_size_default * ctx.scale;
+		ImVec2 grid_offset = ImVec2(fmodf(center_pos.x - canvas_from.x, grid_size), fmodf(center_pos.y - canvas_from.y, grid_size));
+		float h_pos = grid_offset.y;
+		for (int i = 0, c = int(canvas_size.y / grid_size) + 1; i < c; ++i, h_pos += grid_size) {
+			ImVec2 from = ImVec2(canvas_from.x, canvas_from.y + h_pos);
+			ImVec2 to = ImVec2(canvas_to.x, canvas_from.y + h_pos);
+			dl.AddLine(from, to, IM_COL32(150, 150, 150, 50));
+		}
+		float v_pos = grid_offset.x;
+		for (int i = 0, c = int(canvas_size.x / grid_size) + 1; i < c; ++i, v_pos += grid_size) {
+			ImVec2 from = ImVec2(canvas_from.x + v_pos, canvas_from.y);
+			ImVec2 to = ImVec2(canvas_from.x + v_pos, canvas_to.y);
+			dl.AddLine(from, to, IM_COL32(150, 150, 150, 50));
+		}
+		dl.AddLine(ImVec2(center_pos.x, canvas_from.y), ImVec2(center_pos.x, canvas_to.y), IM_COL32(150, 150, 150, 100));
+		dl.AddLine(ImVec2(canvas_from.x, center_pos.y), ImVec2(canvas_to.x, center_pos.y), IM_COL32(150, 150, 150, 100));
+
+		//draw transitions
+		for (int i = 0, c = root->m_children.size(); i < c; ++i) {
+			const GroupNode::Child& node = root->m_children[i];
+			for (int j = 0, cj = node.transitions.size(); j < cj; ++j) {
+				const GroupNode::Child::Transition& trans = node.transitions[j];
+				//dl.AddBezierCurve
+				ImVec2 from = center_pos + ImVec2(node.node->m_pos_x, node.node->m_pos_y);
+				if (ctx.m_selected == node.node)
+					from = from + dragging;
+				ImVec2 to = center_pos + ImVec2(root->m_children[trans.to].node->m_pos_x, root->m_children[trans.to].node->m_pos_y);
+				if (ctx.m_selected == root->m_children[trans.to].node)
+					to = to + dragging;
+				dl.AddLine(from, to, IM_COL32(255, 255, 255, 255));
+			}
+		}
+
+		//draw nodes bottom to top
 		for (int i = root->m_children.size(); i > 0; --i) {
-			GroupNode::Child& node = root->m_children[i - 1];
+			const GroupNode::Child& node = root->m_children[i - 1];
 
 			Data data;
-			data.begin = center_pos + ImVec2(node.node->m_pos_x, node.node->m_pos_y);
+			data.begin = center_pos + ImVec2(node.node->m_pos_x, node.node->m_pos_y) * scale_vec;
 			if (ctx.m_selected == node.node)
 				data.begin = data.begin + dragging;
-			data.end = data.begin + size;
+			data.end = data.begin + node_size;
 			data.hovered = (hovered == node.node);
 			data.selected = (ctx.m_selected == node.node);
 			draw_node(data, dl, *node.node);
 		}
+
+		//draw hud
+		ImGui::PushItemWidth(50);
+		ImGui::DragFloat("scale", &ctx.scale, 0.1f, 0.1f, 100.0f, "%.1f");
+		ImGui::SameLine();
+		ImGui::DragFloat("grid size", &ctx.grid_size_default, 1, 1, 1000.0f, "%.0f");
+		ImGui::PopItemWidth();
 
 		ImGui::PopClipRect();
 	}
@@ -535,7 +610,10 @@ struct ControllerEditorImpl : ControllerEditor {
 				ImGui::Columns(2);
 				hierarchy_ui(*m_controller->m_root);
 				ImGui::NextColumn();
-				if (m_current_node) ui_dispatch(*m_current_node);
+				if (ImGui::BeginChild("node ui")) {
+					if (m_current_node) ui_dispatch(*m_current_node);
+				}
+				ImGui::EndChild();
 				ImGui::Columns();
 			}
 		}
@@ -632,41 +710,6 @@ struct ControllerEditorImpl : ControllerEditor {
 					entry.slot = 0;
 				}
 			}
-
-			// TODO
-			/*if (ImGui::CollapsingHeader("Transitions")) {
-				Array<GroupNode::Child>& children = m_current_level->m_children;
-				if (children.empty()) {
-					ImGui::Text("No child nodes.");
-				}
-				else {
-					for (GroupNode::Child& child : children) {
-						for (GroupNode::Child::Transition& tr : child.transitions) {
-							const char* name_from = child.node->m_name.c_str();
-							const char* name_to = children[tr.to].node->m_name.c_str();
-							if (!ImGui::TreeNodeEx(&tr, 0, "%s -> %s", name_from, name_to)) continue;
-
-							u32 from = u32(&child - children.begin());
-							if (nodeInput("From", Ref(from), children)) {
-								children[from].transitions.push(tr);
-								child.transitions.erase(u32(&tr - child.transitions.begin()));
-								ImGui::TreePop();
-								break;
-							}
-
-							nodeInput("To", Ref(tr.to), children);
-							conditionInput("Condition", m_controller->m_inputs, Ref(tr.condition_str), Ref(tr.condition));
-
-							ImGui::TreePop();
-						}
-					}
-
-					if (ImGui::Button("Add")) {
-						GroupNode::Child::Transition& transition = children[0].transitions.emplace(m_controller->m_allocator);
-						transition.to = 0;
-					}
-				}
-			}*/
 
 			if (ImGui::CollapsingHeader("Bone masks")) {
 				char model_path[MAX_PATH_LENGTH];
